@@ -18,7 +18,7 @@ venv/
 
 # --- Dataset & Big Files (Your Request) ---
 DataSet/
-data/
+# data/
 *.zip
 *.tar.gz
 *.csv
