@@ -1,0 +1,48 @@
+# --- Python & System ---
+__pycache__/
+*.py[cod]
+*$py.class
+.DS_Store
+Thumbs.db
+
+# --- Environments ---
+env/
+venv/
+.venv/
+.env
+
+# --- IDE Settings ---
+.vscode/
+.idea/
+
+# --- Dataset & Big Files (Your Request) ---
+DataSet/
+data/
+*.zip
+*.tar.gz
+*.csv
+
+# --- Hydra (Configuration Outputs) ---
+# Hydra creates these folders for every run
+outputs/
+multirun/
+.hydra/
+
+# --- TensorBoard & Logging ---
+runs/
+*.log
+events.out.tfevents.*
+
+# --- PyTorch Models & Checkpoints ---
+# Ignore heavy weight files so you don't push GBs to GitHub
+*.pth
+*.pt
+*.ckpt
+best_model.pth
+
+# --- Testing & Temporary Images ---
+# If you generate temp images during inference
+*.jpg
+*.jpeg
+*.png
+!image.jpeg  # Keep your specific test image if you want it tracked

@@ -1,0 +1,47 @@
+# This is the main configuration file for the 'baseline1' experiment.
+
+# in this base line we will fine-tune resent over the middle frame for each clip 
+
+defaults:
+  - _self_   
+  - transforms: default_transforms.yaml
+
+# --- Data and DataLoader Configuration ---
+batch_size: 32
+num_workers: 7
+pin_memory: True
+class_names:
+  - l-pass
+  - r-pass
+  - l-spike
+  - r_spike
+  - l_set
+  - r_set
+  - l_winpoint
+  - r_winpoint
+  
+# --- Training Configuration ---
+num_epochs: 100
+learning_rate: 0.0001
+
+# --- Scheduler Configuration (Modified) ---
+lr_scheduler:
+  name: CosineAnnealingLR
+  # Use Hydra interpolation to link this to num_epochs automatically
+  T_max: ${num_epochs}  
+  # The minimum learning rate to reach at the end of training
+  eta_min: 1e-5         
+
+ 
+
+# --- Environment and Reproducibility ---
+device: cuda
+seed: 42
+ 
+
+# --- Output Directory ---
+# Hydra will automatically handle output directories, but you can specify a
+# name for the experiment run.
+hydra:
+  run:
+    dir: ./runs/baseline1/${now:%Y-%m-%d}/${now:%H-%M-%S}

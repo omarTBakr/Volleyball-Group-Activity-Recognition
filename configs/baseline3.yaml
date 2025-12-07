@@ -1,0 +1,50 @@
+# This is the main configuration file for the 'baseline3' experiment.
+
+ 
+
+defaults:
+  - _self_   
+  - transforms: default_transforms.yaml
+
+# --- Data and DataLoader Configuration ---
+batch_size: 4
+num_workers: 7
+pin_memory: true
+frame_chunk_size: 4  # Number of frames to process per chunk (use smaller values to reduce GPU memory)
+use_amp: false       # Set to true to enable mixed precision training (requires CUDA)
+accumulation_steps: 1  # Gradient accumulation steps to reduce effective batch memory
+
+# These MUST match the group_activity labels in your annotations.txt
+class_names:
+  - l_winpoint
+  - r_winpoint
+  - l-pass
+  - r-pass
+  - l-spike
+  - r_spike
+  - l_set
+  - r_set
+
+# --- Training Configuration ---
+num_epochs: 100
+learning_rate: 0.0001
+# patience: 5 # Used for ReduceLROnPlateau, not typically for CosineAnnealing
+mix_up: true # a boolean flag for a training technique
+
+# --- Learning Rate Scheduler Configuration ---
+# We configure CosineAnnealingLR here.
+lr_scheduler:
+  name: "CosineAnnealingLR"
+  T_max: 100         # Usually set to num_epochs
+  eta_min: 0.00001   # Minimum learning rate to reach
+
+# --- Environment and Reproducibility ---
+device: cuda
+seed: 42
+
+# --- Output Directory ---
+# Hydra will automatically handle output directories, but you can specify a
+# name for the experiment run.
+hydra:
+  run:
+    dir: ./runs/baseline3/${now:%Y-%m-%d}/${now:%H-%M-%S}
