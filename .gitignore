@@ -30,8 +30,8 @@ multirun/
 .hydra/
 
 # --- TensorBoard & Logging ---
-runs/
-# *.log
+# runs/
+*.log
 # events.out.tfevents.*
 
 # --- PyTorch Models & Checkpoints ---
