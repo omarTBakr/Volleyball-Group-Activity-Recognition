@@ -36,7 +36,7 @@ multirun/
 
 # --- PyTorch Models & Checkpoints ---
 # Ignore heavy weight files so you don't push GBs to GitHub
-saved_models/
+# saved_models/
 *.pth
 *.pt
 *.ckpt
