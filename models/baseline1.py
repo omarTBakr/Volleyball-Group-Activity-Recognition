@@ -10,7 +10,7 @@ from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
 from torchvision import models, transforms
 from utils.utility import save_model, train_one_epoch, validate_one_epoch, test_one_epoch, load_model
-from src.data.data_loader import VolleyballDataset, collate_fn
+from src.data.data_loader import VolleyballDataset
 
 # =================================================================
 # === 1. EXTENDED MODEL ===

@@ -1,0 +1,306 @@
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% --------------------------------------------------------
+% Tau
+% LaTeX Template
+% Version 2.4.4 (2/06/2026)
+%
+% Author: 
+% Omar Ayman Tawfiq Bakr (bakro0298@gmail.com)
+% 
+% License:
+% Creative Commons CC BY 4.0
+% --------------------------------------------------------
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\documentclass[9pt,a4paper,twocolumn,twoside]{tau-class/tau}
+\usepackage[english]{babel}
+\usepackage{enumitem}
+\usepackage{hyperref}
+\usepackage{fontawesome5}
+%% Spanish babel recommendation
+% \usepackage[spanish,es-nodecimaldot,es-noindentfirst]{babel} 
+
+%% Draft watermark
+% \usepackage{draftwatermark}
+
+%----------------------------------------------------------
+% TITLE
+%----------------------------------------------------------
+
+\journalname{Summary Report }
+\title{Volleyball-Group-Activity-Recognition}
+
+%----------------------------------------------------------
+% AUTHORS, AFFILIATIONS AND PROFESSOR
+%----------------------------------------------------------
+
+\author[a,1]{Omar Ayman Tawfiq Bakr \href{bakro0298@gmail.com}{\faGoogle}
+ \href{https://www.linkedin.com/in/omarrbakr/}{\faLinkedinIn } \href{https://github.com/omarTBakr}{\faGithub} }
+
+%\author[b,2]{Author Two}
+%\author[b,c,3]{Author Three}
+
+%----------------------------------------------------------
+
+%\affil[a]{Affiliation of author one}
+%\affil[b]{Affiliation of author two}
+%\affil[c]{Affiliation of author three}
+
+%\professor{Professor/Authority or other information}
+
+%----------------------------------------------------------
+% FOOTER INFORMATION
+%----------------------------------------------------------
+
+%\institution{College name}
+\footinfo{Summary Report}
+\theday{May 16, 2026}
+\leadauthor{Omar Ayman Bakr}
+\course{Volleyball-Group-Activity-Recognition}
+
+%----------------------------------------------------------
+% ABSTRACT AND KEYWORDS
+%----------------------------------------------------------
+
+\begin{abstract}    
+   In this Report we will discuss  Volleyball Group Activity Detection dataset, the dataset contains videos of volleyball players and annotations of their actions
+\end{abstract}
+
+%----------------------------------------------------------
+
+\keywords{\ Volleyball, Group Activity Detection,CNN, RNN, LSTM,Resnet50,Classification,Multiclass Classification, Transfer Learning}
+
+%----------------------------------------------------------
+
+\begin{document}
+		
+    \maketitle 
+    \thispagestyle{firststyle} 
+    \tauabstract 
+    % \tableofcontents
+    % \linenumbers 
+    
+%----------------------------------------------------------
+
+\section{Introduction}
+
+    \taustart{V}olleyball Group Activity Detection dataset was originally a dataset held to classify the action of a group of players in a volleyball match ,
+    the data was introduced as a part of this paper \href{Paper in CVPR}{https://www.cs.sfu.ca/~mori/research/papers/ibrahim-cvpr16.pdf}
+    you can download the data set from \href{Dataset Download}{https://github.com/mostafa-saad/deep-activity-rec} 
+    and you can find it on kaggle here \href{Kaggle Download}{https://www.kaggle.com/datasets/ahmedmohamed365/volleyball}
+
+\section{Dataset Summary}
+  
+we have 8 action classes across the whole Image :
+  \begin{itemize}
+    \item Moving
+    \item Standing
+    \item Blocking
+    \item Waiting
+    \item Setting
+    \item Digging
+    \item Falling
+    \item Jumping
+  \end{itemize}
+  
+  firstly  Standing class is the most frequent frame in the dataset compared to other classes , resulting in huge imbalance in the dataset as seen in Fig \ref{fig:figures/tracking_classes_dist}
+  \begin{figure}
+    	     \centering
+    	     \includegraphics[width=0.95\linewidth]{figures/action_classes_distribution.png}
+    	     \caption{distribution of action classes across different videos }
+    	     \label{fig:action_classes_distribution}
+    	 \end{figure}
+    
+   ,therefore one way is to downsample the standing class.
+ 
+ 
+	
+\section{Abstract}
+ I have come up with what I think are some decent features, as follows:
+   \begin{enumerate}
+    \item Time-related features: \texttt{is\_weekend}, \texttt{is\_rushhour}, features directly extracted from the datetime object of the pickup, and also some cyclic time features (a fancy name for applying $\sin$ and $\cos$ functions for each feature).
+    
+    \end{enumerate}
+    
+    
+\section{New York Trip Duration insights }
+
+    \subsection{Data types and Null values}
+    	 \begin{itemize}
+    	     \item The data was clean and all data types were almost correct except for the `pickup\_datetime` which needed to be casted,\textbf{note that we have decided to drop the `dropoff\_datetime` from  the data to make the problem a bit challenging}  
+            
+	 	 \end{itemize}
+        
+
+    \subsection{pick up date time}
+	   \begin{itemize}
+	                \item checking the date range, we found that the trips were almost uniformly distributed between January, February, March, April, May, June, and July. I guess that other months were held for testing, as you can see in 
+                    \item trips are also nicely distributed, as you can see in Fig. \ref{fig:pickup_datetime_ditribution}
+        \begin{figure}
+    	     \centering
+    	     \includegraphics[width=0.75\linewidth]{figures/pickup_datetime_distribution.png}
+    	     \caption{distribution of trips across different dates }
+    	     \label{fig:pickup_datetime_ditribution}
+    	 \end{figure}
+	   \end{itemize}
+           
+
+        
+         
+		
+    \subsection{Time of the day }
+	
+        There is a noticeable increase in trip length for late hours and almost the opposite in early hours, which is to be expected! which you can see in Fig. \ref{fig:duration_with_hour}
+        \begin{figure}
+            \centering
+            \includegraphics[width=0.75\linewidth]{figures/trip duration with hour of the day.png}
+            \caption{Enter Caption}
+            \label{fig:duration_with_hour}
+        \end{figure}
+        
+    \subsection{Weekend or Not} 
+    We can see that the trips during weekends tend to be shorter than the ones on working days, as you can see in Fig.\ref{fig:weekend}
+    \begin{figure}
+             \centering
+             \includegraphics[width=1\linewidth]{figures/weekend.png}
+             \caption{Density of trip duration over working and non-working days }
+             \label{fig:weekend}
+         \end{figure}
+	\subsection{vendor id}
+        I had a suspicion about this column from the very beginning, so my judgment could be biased, but I will try to convince you why it is useless.
+        \begin{itemize}
+        \item first, there are 2 vendor IDs, which indicate that there are 2 separate entities or companies
+        \item checking the average trip duration, we find that 845.4 for vendor 1 and 1058.64 for vendor 2 
+        (a difference! Yes, but is it noticeable? Probably not !) 
+        \item If you check the trip distribution for each vendor, you probably won't notice any difference for both the overall distribution and for each month! as you can see in Fig \ref{fig:vendor-tripdurationl}
+        
+         \begin{figure}
+             \centering
+             \includegraphics[width=1\linewidth]{trip distribution for each vendor.png}
+             \caption{trip Distribution For Each Vendor}
+             \label{fig:vendor-tripdurationl}
+         \end{figure}
+        \end{itemize}
+
+        
+    \subsection{Passenger count}
+    \begin{itemize}
+        \item Here we can find a noticeable difference between the two vendors, vendor 2 takes a very large number of passengers, up to 6, as you can see in Fig \ref{fig:passenger-vendor}
+        \begin{figure}
+            \centering
+            \includegraphics[width=0.75\linewidth]{figures/passenger count per vendor.png}
+            \caption{number of passengers per vendor }
+            \label{fig:passenger-vendor}
+        \end{figure}
+        \end{itemize}
+
+    \subsection{geo distance and longitude and latitude}
+        \begin{itemize}
+            \item some anomalous tips are >100 Km could reach 1200 Km, which is not normal at all  
+            \item  just filtering 0.01\% of the data, we get a nicely distributed trip distance  
+            \item you will see that longitude and latitude are almost focused on a single point, this is ok because the difference between each line is around 111 km 
+            \begin{figure}
+                \centering
+                \includegraphics[width=1\linewidth]{figures/distributionOfTripDistance.png}
+                \caption{Distribution of trip distance }
+                \label{fig:enter-label}
+            \end{figure}
+        \end{itemize}
+
+        \subsection{osrm api}
+        \begin{itemize}
+            \item  OSRM (Open Source Routing Machine) is a high-performance routing engine for shortest paths in road networks
+            \item you can download the data you need locally and build a Docker image, then query that image as you want. I have included instructions in a separate file.  
+            \item I have used it to predict the \textbf{distance} between pickup (longitude, latitude ) and drop off (longitude, latitude)  and \textbf{time} needed for the trip
+            
+            \item Note that since the data is from 2016, the estimate from the OSRM api is a bit odd since it is using the 2025 latest data about the roads 
+
+        \end{itemize}
+
+\section{geographic information}
+\subsection{Borough information}
+If we map each trip (pickup and dropoff ) into a Borough neighbourhood, we will find that Manhattan has the biggest share among all five regions, and you can double-check this in Fig. \ref{fig:borough-info} 
+\begin{figure}
+    \centering
+    \includegraphics[width=0.75\linewidth]{figures/Borough info.png}
+    \caption{total number of pickups and dropoffs for each Borough region}
+    \label{fig:borough-info}
+\end{figure}
+
+\begin{itemize}
+    \item i have used the data \href{https://catalog.data.gov/dataset/borough-boundaries-a8eb4#:~:text=Metadata%20Updated%3A%20April%2012%2C%202025}{here} about the New York Borough regions 
+    \item each Borough is defined by  a `MultiPolygon`shape  
+\end{itemize}
+
+\section{Traffic Volume}
+According to the data from \href{https://data.cityofnewyork.us/Transportation/Traffic-Volume-Counts/btm5-ppia/about_data}{here} we can find that `Queens ' is the busiest neighbourhood of all of them, and you can see this in Fig \ref{fig:traffic-volume} 
+\begin{itemize}
+    \item note that we have added `unknown` territory that we will assign for any unknown neighborhood 
+\end{itemize}
+\begin{figure}
+    \centering
+    \includegraphics[width=0.75\linewidth]{figures/Traffic Volumne For Borough.png}
+    \caption{Traffic volume for each neighborhood}
+    \label{fig:traffic-volume}
+\end{figure}
+\section{Weather Data }
+data can be found in this \href{https://www.kaggle.com/datasets/mathijs/weather-data-in-new-york-city-2016?resource=download&select=weather_data_nyc_centralpark_2016%281%29.csv}{link}, which is pretty clean. We took all the data available, which I think has a huge impact on the trip duration, like
+\begin{itemize}
+    \item max temperature 
+    \item min temperature 
+    \item snow depth 
+    \item snowfall 
+\end{itemize}
+
+\section{Correlation matrix for all the features}
+You can check the correlation matrix in Fig. \ref{fig:correlation-matrix}
+\begin{figure}
+    \centering
+    \includegraphics[width=1\linewidth]{figures/correlation matrix.png}
+    \caption{Correlation matrix for all the features, you can see  that we have lots of 0(s) but this does not mean that there is no relationship between these features and the output, \textbf{this only means that there is no linear relationship between them} but you will see that we got a reasonable performance in the modeling section}
+    \label{fig:correlation-matrix}
+\end{figure}
+
+\section{Modeling}
+This work was for a closed context, the goal was to focus on feature Engineering, part of the problem not so much on modeling. We agreed to set the model to be `sklearn.linear\_modelRidge(alpha =1)` to compare our results with each other, and here are my results 
+\begin{itemize}
+    \item  I have used `PolynomialFeatures (degree=2)` \textbf{don't increase the degree over, you will overfit the data, at least this is what I got} 
+\end{itemize} 
+\textbf{You can find the results in this Table}\ref{tab:Final-Results}
+  \begin{table}[H]
+            \centering
+            \caption{scores over Train and Test Data }
+            \label{tab:Final-Results}
+            \begin{tabular}{lll}
+                \toprule
+                \textbf{Data} & \textbf{rms error} & $$R^2$ \textbf{score} \\
+                \midrule
+               Train & 0.3973 & 0.7146 \\
+                Test  & 0.4010 & 0.7106\\
+                
+                \bottomrule   
+            \end{tabular}
+			
+            \tabletext{Note: These results were tested over Kaggle-provided data}
+			
+        \end{table}
+
+\section{What could be Enhanced}
+\begin{itemize}
+     \item Better traffic volume data; extract avg. time/distance per borough & day-segment (e.g., \textbf{Qns-Man morn.}).
+    \item More granular weather (e.g., wind/trip direction); more explicit variable interactions (not just PolynomialFeatures).
+    \item Feature selection (e.g., top 500 from model).
+    \item Explore automatic feature engineering tools.
+   
+\end{itemize}
+
+
+	
+
+
+%----------------------------------------------------------
+
+
+%----------------------------------------------------------
+
+\end{document}

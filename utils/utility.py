@@ -14,7 +14,7 @@ def save_model(model_name, epoch, model, optimizer, loss, class2index):
 
 def load_model(model_name, model, optimizer=None):
  
-    return model, optimizer, epoch, loss, class_to_idx
+    pass 
 
 
 def get_images_from_batch(batch, device):
