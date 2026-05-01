@@ -1,0 +1,16 @@
+# --- Math & Data ---
+numpy==2.4.4
+
+# --- Image Processing & Plotting ---
+pillow==12.2.0
+matplotlib==3.10.8
+
+# --- Deep Learning (PyTorch Ecosystem) ---
+torch==2.9.0
+torchvision==0.24.0
+torchinfo==1.8.0
+torchsummary==1.5.1
+
+# --- Utilities ---
+tqdm==4.67.3
+requests==2.32.5

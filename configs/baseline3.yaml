@@ -7,7 +7,7 @@ defaults:
   - transforms: default_transforms.yaml
 
 # --- Data and DataLoader Configuration ---
-batch_size: 4
+batch_size: 8
 num_workers: 7
 pin_memory: true
 frame_chunk_size: 4  # Number of frames to process per chunk (use smaller values to reduce GPU memory)
@@ -36,7 +36,7 @@ mix_up: true # a boolean flag for a training technique
 lr_scheduler:
   name: "CosineAnnealingLR"
   T_max: 100         # Usually set to num_epochs
-  eta_min: 0.00001   # Minimum learning rate to reach
+  eta_min: 1e-5   # Minimum learning rate to reach
 
 # --- Environment and Reproducibility ---
 device: cuda
