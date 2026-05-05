@@ -1,30 +1,57 @@
-from configs.path_config import (
-    MAIN_DATASET_DIR,
+from collections import defaultdict
+
+from matplotlib import pyplot as plt  # ty:ignore[unresolved-import]
+
+from configs import (
+    VOLLEYBALL_ANNOTATIONS_DIR,
     VOLLEYBALL_DETECTION_DIR,
     VOLLEYBALL_TRACKING_DIR,
 )
-from matplotlib import pyplot as plt
-import numpy as np
 
-
-from pathlib import Path
-import sys
-from collections import defaultdict
-
+"""
+    This file will calculate the statistics across every frame in the dataset 
+    such as counting the number of action classes and person classes in each directory
+    and plotting the distribution of each class 
+"""
 
 def count_directories(directory):
+    """
+    Function will count the number of directories in a given directory
+        
+    Parameters
+    ----------
+    directory (Path): The directory to count the number of directories in.
+        
+    Returns
+    -------
+    int: The number of directories in the given directory.
+
+    """
     # make sure the provided path is a directory
     if not directory.is_dir():
         print(f"Error: {directory} is not a valid directory.")
+        return 0
 
-    dir = 0
+    dir_count = 0
     for video_folder in directory.iterdir():
         if video_folder.is_dir():
-            dir += 1
-    return dir
+            dir_count += 1
+    return dir_count
 
 
 def count_classes_in_directory(directory):
+    """
+    Function will count the number of action classes per frame and person classes per frame in a directory
+        
+    Parameters
+    ----------
+     directory (Path): The directory to count the number of action classes and person classes in.
+        
+    Returns
+    -------
+     tuple: A tuple containing two dictionaries, one for action classes and one for person classes.
+
+    """
     action_classes = defaultdict(int)
     person_classes = defaultdict(int)
 
@@ -34,12 +61,10 @@ def count_classes_in_directory(directory):
     # print(action_file)
     if action_file.exists():
         # print('file exists and attempting to open it ')
-        with open(action_file, "r") as f:
+        with action_file.open(mode="r") as f:
             # print(f'file opened successfully {action_file}')
             for line in f:
-                for (
-                    entry
-                ) in line.strip().split():  # Assuming class_id is the first element
+                for entry in line.strip().split():  # Assuming class_id is the first element
                     try:
                         int(entry)  # Check if entry can be converted to an integer
                     except ValueError:
@@ -50,7 +75,7 @@ def count_classes_in_directory(directory):
                             action_classes[entry] += 1
 
     if person_file.exists():
-        with open(person_file, "r") as f:
+        with person_file.open(mode="r") as f:
             for line in f:
                 for (
                     entry
@@ -76,7 +101,7 @@ def count_classes_in_dataset(dataset_directory):
             for clip_folder in video_folder.iterdir():
                 if clip_folder.is_dir():
                     action_classes, person_classes = count_classes_in_directory(
-                        clip_folder
+                        clip_folder,
                     )
                     total_action_classes.append(action_classes)
                     total_person_classes.append(person_classes)
@@ -91,8 +116,8 @@ def count_classes_in_tracking_dataset(tracking_dataset_directory):
             # print(tracking_file)
             if tracking_file.exists():
                 # print('file exists and attempting to open it ')
-                with open(tracking_file, "r") as f:
-                    # print(f'file opened successfully {action_file}')
+                with tracking_file.open(mode="r") as f:
+                    # print(f'file opened successfully {tracking_file}')
                     for line in f:
                         tracking_classes[ line.strip().split()[-1]] += 1
     return tracking_classes
@@ -105,7 +130,7 @@ def count_all_tracking_classes(tracking_dataset_directory):
     return tracking_classes
 
 def plot_class_distribution(classes, label):
-    
+
     # Action classes
     fig, ax = plt.subplots(figsize=(10, 5))
     bars = ax.bar(classes.keys(), classes.values(), label=label)
@@ -113,9 +138,60 @@ def plot_class_distribution(classes, label):
     ax.set_title(  f"{label} classes distribution", fontsize=16)
     ax.set_ylabel("number of frames", fontsize=12)
     ax.set_xlabel("classes", fontsize=12)
-    ax.tick_params(axis='x', rotation=45, labelsize=12)
+    ax.tick_params(axis="x", rotation=45, labelsize=12)
     plt.tight_layout()
     plt.show()
+
+
+def count_annotations(directory):
+    """
+    Count group-activity and person-action labels from annotations.txt files.
+
+    ``annotations.txt`` lives at the **video level** (one per video directory).
+    Each line has the format::
+
+        frame.jpg  group_activity  x1 y1 w h action  [x1 y1 w h action] ...
+
+    Parameters
+    ----------
+    directory : Path
+        The main dataset directory containing video subdirectories.
+
+    Returns
+    -------
+    defaultdict[str, int]
+        Combined counts of group-activity and person-action labels.
+
+    """
+    action_classes = defaultdict(int)
+
+    for video_folder in sorted(directory.iterdir()):
+        if not video_folder.is_dir():
+            continue
+
+        annot_file = video_folder / "annotations.txt"
+        if not annot_file.exists():
+            continue
+
+        with annot_file.open(mode="r") as f:
+            for line in f:
+                parts = line.strip().split()
+                if len(parts) < 2:
+                    continue
+
+                # Index 1: group activity (e.g. 'r_winpoint')
+                group_activity = parts[1]
+                action_classes[group_activity] += 1
+
+                # Person actions: every 5th field starting at index 6
+                # Layout: frame.jpg  activity  x y w h action  x y w h action ...
+                idx = 6
+                while idx < len(parts):
+                    action_classes[parts[idx]] += 1
+                    idx += 5
+
+    return action_classes
+
 
 def merge_dictionaries(dictionaries):
     merged_dict = defaultdict(int)
@@ -123,7 +199,7 @@ def merge_dictionaries(dictionaries):
         for key, value in dictionary.items():
             merged_dict[key] += value
     return merged_dict
-    
+
 if __name__ == "__main__":
     # video_count = count_directories(MAIN_DATASET_DIR)
     # print(f"Total number of videos in the main dataset: {video_count}")
@@ -142,20 +218,24 @@ if __name__ == "__main__":
 
     tracking_classes = count_all_tracking_classes(VOLLEYBALL_TRACKING_DIR)
     tracking_classes = merge_dictionaries(tracking_classes)
+    annotation_classes = count_annotations(VOLLEYBALL_ANNOTATIONS_DIR)
 
     print(f"action class  :{action_classes}\n" )
     print(f"person class  :{person_classes}\n" )
     print(f"tracking class  :{tracking_classes}\n" )
     print(
-        f"Total unique action classes in the dataset: {len(action_classes.keys())}"
+        f"Total unique action classes in the dataset: {len(action_classes.keys())}",
     )
     print(
-        f"Total unique person classes in the dataset: {len(person_classes.keys())}"
+        f"Total unique person classes in the dataset: {len(person_classes.keys())}",
     )
     print(
-        f"Total unique tracking classes in the dataset: {len(tracking_classes.keys())}"
+        f"Total unique tracking classes in the dataset: {len(tracking_classes.keys())}",
     )
 
     plot_class_distribution(action_classes, "action")
     plot_class_distribution(person_classes , "person")
-    plot_class_distribution(tracking_classes, "tracking")   
+    plot_class_distribution(tracking_classes, "tracking")
+    plot_class_distribution(annotation_classes, "annotation")
+
+

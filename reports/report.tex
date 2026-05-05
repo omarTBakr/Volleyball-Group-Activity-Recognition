@@ -63,12 +63,12 @@
 %----------------------------------------------------------
 
 \begin{abstract}    
-   In this Report we will discuss  Volleyball Group Activity Detection dataset, the dataset contains videos of volleyball players and annotations of their actions
+   This report documents the data pipeline and loader architecture for the Volleyball Group Activity Recognition project. The dataset, introduced in the CVPR 2016 paper by Mostafa S. Ibrahim et al., contains 55 volleyball videos with two annotation levels: 8 scene-level group activities and 9 player-level individual actions. We describe the two-stage parsing pipeline that unifies three raw annotation sources into a single fast-loading pickle cache, and the generic PyTorch data loader that supports all eight baseline models (B1--B8) through configurable constructor flags.
 \end{abstract}
 
 %----------------------------------------------------------
 
-\keywords{\ Volleyball, Group Activity Detection,CNN, RNN, LSTM,Resnet50,Classification,Multiclass Classification, Transfer Learning}
+\keywords{\ Volleyball, Group Activity Recognition, CNN, RNN, LSTM, ResNet50, Classification, Multiclass Classification, Transfer Learning}
 
 %----------------------------------------------------------
 
@@ -84,219 +84,212 @@
 
 \section{Introduction}
 
-    \taustart{V}olleyball Group Activity Detection dataset was originally a dataset held to classify the action of a group of players in a volleyball match ,
-    the data was introduced as a part of this paper \href{Paper in CVPR}{https://www.cs.sfu.ca/~mori/research/papers/ibrahim-cvpr16.pdf}
-    you can download the data set from \href{Dataset Download}{https://github.com/mostafa-saad/deep-activity-rec} 
-    and you can find it on kaggle here \href{Kaggle Download}{https://www.kaggle.com/datasets/ahmedmohamed365/volleyball}
+    \taustart{V}olleyball Group Activity Recognition is a hierarchical classification problem where the goal is to classify the group activity of a volleyball scene (one of 8 classes) while also recognising individual player actions (one of 9 classes).
+    The dataset was introduced in the CVPR 2016 paper \href{https://www.cs.sfu.ca/~mori/research/papers/ibrahim-cvpr16.pdf}{``A Hierarchical Deep Temporal Model for Group Activity Recognition''} by Mostafa S. Ibrahim et al.
+    You can download the dataset from \href{https://github.com/mostafa-saad/deep-activity-rec}{the official repository} 
+    or from \href{https://www.kaggle.com/datasets/ahmedmohamed365/volleyball}{Kaggle}.
 
 \section{Dataset Summary}
   
-we have 8 action classes across the whole Image :
+The dataset has \textbf{two levels of annotation}:
+
+\subsection{9 Person Actions (Player-Level)}
   \begin{itemize}
-    \item Moving
-    \item Standing
     \item Blocking
-    \item Waiting
-    \item Setting
     \item Digging
     \item Falling
     \item Jumping
+    \item Moving
+    \item Setting
+    \item Spiking
+    \item Standing
+    \item Waiting
   \end{itemize}
   
-  firstly  Standing class is the most frequent frame in the dataset compared to other classes , resulting in huge imbalance in the dataset as seen in Fig \ref{fig:figures/tracking_classes_dist}
-  \begin{figure}
-    	     \centering
-    	     \includegraphics[width=0.95\linewidth]{figures/action_classes_distribution.png}
-    	     \caption{distribution of action classes across different videos }
-    	     \label{fig:action_classes_distribution}
-    	 \end{figure}
-    
-   ,therefore one way is to downsample the standing class.
- 
- 
-	
-\section{Abstract}
- I have come up with what I think are some decent features, as follows:
-   \begin{enumerate}
-    \item Time-related features: \texttt{is\_weekend}, \texttt{is\_rushhour}, features directly extracted from the datetime object of the pickup, and also some cyclic time features (a fancy name for applying $\sin$ and $\cos$ functions for each feature).
-    
-    \end{enumerate}
-    
-    
-\section{New York Trip Duration insights }
+The \textit{standing} class is the most frequent action in the dataset, resulting in a significant class imbalance as shown in Fig.~\ref{fig:action_classes_dist}.
 
-    \subsection{Data types and Null values}
-    	 \begin{itemize}
-    	     \item The data was clean and all data types were almost correct except for the `pickup\_datetime` which needed to be casted,\textbf{note that we have decided to drop the `dropoff\_datetime` from  the data to make the problem a bit challenging}  
-            
-	 	 \end{itemize}
-        
+  \begin{figure}[h]
+     \centering
+     \includegraphics[width=0.95\linewidth]{figures/action_classes_dist.png}
+     \caption{Distribution of person-action classes across all videos.}
+     \label{fig:action_classes_dist}
+ \end{figure}
 
-    \subsection{pick up date time}
-	   \begin{itemize}
-	                \item checking the date range, we found that the trips were almost uniformly distributed between January, February, March, April, May, June, and July. I guess that other months were held for testing, as you can see in 
-                    \item trips are also nicely distributed, as you can see in Fig. \ref{fig:pickup_datetime_ditribution}
-        \begin{figure}
-    	     \centering
-    	     \includegraphics[width=0.75\linewidth]{figures/pickup_datetime_distribution.png}
-    	     \caption{distribution of trips across different dates }
-    	     \label{fig:pickup_datetime_ditribution}
-    	 \end{figure}
-	   \end{itemize}
-           
+\subsection{8 Group Activities (Scene-Level)}
+  \begin{itemize}
+    \item Left pass (\texttt{l-pass})
+    \item Right pass (\texttt{r-pass})
+    \item Left spike (\texttt{l-spike})
+    \item Right spike (\texttt{r\_spike})
+    \item Left set (\texttt{l\_set})
+    \item Right set (\texttt{r\_set})
+    \item Left win-point (\texttt{l\_winpoint})
+    \item Right win-point (\texttt{r\_winpoint})
+  \end{itemize}
 
-        
-         
-		
-    \subsection{Time of the day }
-	
-        There is a noticeable increase in trip length for late hours and almost the opposite in early hours, which is to be expected! which you can see in Fig. \ref{fig:duration_with_hour}
-        \begin{figure}
-            \centering
-            \includegraphics[width=0.75\linewidth]{figures/trip duration with hour of the day.png}
-            \caption{Enter Caption}
-            \label{fig:duration_with_hour}
-        \end{figure}
-        
-    \subsection{Weekend or Not} 
-    We can see that the trips during weekends tend to be shorter than the ones on working days, as you can see in Fig.\ref{fig:weekend}
-    \begin{figure}
-             \centering
-             \includegraphics[width=1\linewidth]{figures/weekend.png}
-             \caption{Density of trip duration over working and non-working days }
-             \label{fig:weekend}
-         \end{figure}
-	\subsection{vendor id}
-        I had a suspicion about this column from the very beginning, so my judgment could be biased, but I will try to convince you why it is useless.
-        \begin{itemize}
-        \item first, there are 2 vendor IDs, which indicate that there are 2 separate entities or companies
-        \item checking the average trip duration, we find that 845.4 for vendor 1 and 1058.64 for vendor 2 
-        (a difference! Yes, but is it noticeable? Probably not !) 
-        \item If you check the trip distribution for each vendor, you probably won't notice any difference for both the overall distribution and for each month! as you can see in Fig \ref{fig:vendor-tripdurationl}
-        
-         \begin{figure}
-             \centering
-             \includegraphics[width=1\linewidth]{trip distribution for each vendor.png}
-             \caption{trip Distribution For Each Vendor}
-             \label{fig:vendor-tripdurationl}
-         \end{figure}
-        \end{itemize}
+The tracking-based action distribution is shown in Fig.~\ref{fig:tracking_classes_dist}.
 
-        
-    \subsection{Passenger count}
-    \begin{itemize}
-        \item Here we can find a noticeable difference between the two vendors, vendor 2 takes a very large number of passengers, up to 6, as you can see in Fig \ref{fig:passenger-vendor}
-        \begin{figure}
-            \centering
-            \includegraphics[width=0.75\linewidth]{figures/passenger count per vendor.png}
-            \caption{number of passengers per vendor }
-            \label{fig:passenger-vendor}
-        \end{figure}
-        \end{itemize}
+ \begin{figure}[h]
+     \centering
+     \includegraphics[width=0.95\linewidth]{figures/tracking_classes_dist.png}
+     \caption{Distribution of tracking action classes across all videos.}
+     \label{fig:tracking_classes_dist}
+ \end{figure}
 
-    \subsection{geo distance and longitude and latitude}
-        \begin{itemize}
-            \item some anomalous tips are >100 Km could reach 1200 Km, which is not normal at all  
-            \item  just filtering 0.01\% of the data, we get a nicely distributed trip distance  
-            \item you will see that longitude and latitude are almost focused on a single point, this is ok because the difference between each line is around 111 km 
-            \begin{figure}
-                \centering
-                \includegraphics[width=1\linewidth]{figures/distributionOfTripDistance.png}
-                \caption{Distribution of trip distance }
-                \label{fig:enter-label}
-            \end{figure}
-        \end{itemize}
+\subsection{Annotation Classes (from annotations.txt)}
+The \texttt{annotations.txt} file at the video level contains both group-activity labels and per-person action labels. Counting all labels across the 55 videos produces the combined distribution shown in Fig.~\ref{fig:annotation_classes_dist}. The \textit{standing} class dominates with 38,686 occurrences, followed by \textit{moving} (5,120) and \textit{waiting} (3,600). Group-activity labels (\texttt{l-pass}, \texttt{r\_spike}, etc.) appear once per clip, totalling 4,830 across the dataset.
 
-        \subsection{osrm api}
-        \begin{itemize}
-            \item  OSRM (Open Source Routing Machine) is a high-performance routing engine for shortest paths in road networks
-            \item you can download the data you need locally and build a Docker image, then query that image as you want. I have included instructions in a separate file.  
-            \item I have used it to predict the \textbf{distance} between pickup (longitude, latitude ) and drop off (longitude, latitude)  and \textbf{time} needed for the trip
-            
-            \item Note that since the data is from 2016, the estimate from the OSRM api is a bit odd since it is using the 2025 latest data about the roads 
+ \begin{figure}[h]
+     \centering
+     \includegraphics[width=0.95\linewidth]{figures/annotation_classes_dist.png}
+     \caption{Distribution of all annotation labels (group activities + person actions) from annotations.txt.}
+     \label{fig:annotation_classes_dist}
+ \end{figure}
 
-        \end{itemize}
+\subsection{Dataset Statistics}
 
-\section{geographic information}
-\subsection{Borough information}
-If we map each trip (pickup and dropoff ) into a Borough neighbourhood, we will find that Manhattan has the biggest share among all five regions, and you can double-check this in Fig. \ref{fig:borough-info} 
-\begin{figure}
+\begin{table}[h]
     \centering
-    \includegraphics[width=0.75\linewidth]{figures/Borough info.png}
-    \caption{total number of pickups and dropoffs for each Borough region}
-    \label{fig:borough-info}
-\end{figure}
+    \caption{Data split sizes}
+    \label{tab:data-splits}
+    \begin{tabular}{lcc}
+        \toprule
+        \textbf{Split} & \textbf{Videos} & \textbf{Clips} \\
+        \midrule
+        Train      & 24 & 2,152 \\
+        Validation & 15 & 1,341 \\
+        Test       & 16 & 1,337 \\
+        \midrule
+        Total      & 55 & 4,830 \\
+        \bottomrule
+    \end{tabular}
+\end{table}
 
+Each clip contains \textbf{41 consecutive frames}. The clip name is the middle frame number, which serves as the key frame for annotation.
+
+\section{Raw Data Sources}
+
+The raw dataset provides three separate annotation files per clip:
+
+\begin{enumerate}
+    \item \texttt{action\_detections.txt} — Tab-separated file with per-frame action detections. Each line contains the frame name, number of entries, and for each entry: bounding box $(x, y, w, h)$, confidence score, and action label.
+    
+    \item \texttt{person\_detections.txt} — Same format as action detections but for generic person detection.
+    
+    \item \texttt{clip\_id.txt} (tracking) — Space-separated file with tracked players across frames. Each line: track ID, bounding box $(x_1, y_1, x_2, y_2)$, frame number, three flag attributes, and action label.
+    
+    \item \texttt{annotations.txt} (per video) — Contains the group activity label and per-person bounding boxes for each clip's middle frame.
+\end{enumerate}
+
+\section{Two-Stage Parsing Pipeline}
+
+We unify the raw annotations into a single data structure through a two-stage pipeline implemented in \texttt{src/json\_parser.py}.
+
+\subsection{Stage 1: Player-Level Parsing}
+
+\texttt{create\_master\_json()} iterates over all 55 videos and their clips, parsing the three annotation files into a unified JSON structure keyed by \texttt{video\_id/clip\_id}. Each clip entry contains:
 \begin{itemize}
-    \item i have used the data \href{https://catalog.data.gov/dataset/borough-boundaries-a8eb4#:~:text=Metadata%20Updated%3A%20April%2012%2C%202025}{here} about the New York Borough regions 
-    \item each Borough is defined by  a `MultiPolygon`shape  
+    \item \texttt{actions}: per-frame action detections $\{$frame $\rightarrow$ list of $\{$box, score, label$\}\}$
+    \item \texttt{persons}: per-frame person detections (same format)
+    \item \texttt{tracking}: per-frame tracked players $\{$frame $\rightarrow$ list of $\{$id, box, flags, action$\}\}$
 \end{itemize}
 
-\section{Traffic Volume}
-According to the data from \href{https://data.cityofnewyork.us/Transportation/Traffic-Volume-Counts/btm5-ppia/about_data}{here} we can find that `Queens ' is the busiest neighbourhood of all of them, and you can see this in Fig \ref{fig:traffic-volume} 
+\subsection{Stage 2: Scene-Level Enrichment}
+
+\texttt{enrich\_with\_scene\_labels()} reads each video's \texttt{annotations.txt} to extract the group-activity label and merges it into the master JSON under a new \texttt{scene\_class} key per clip.
+
+\subsection{Pickle Caching}
+
+The enriched master JSON ($\sim$1.6\,GB) is dumped to a pickle file ($\sim$247\,MB) via \texttt{pickle\_dump.py} for fast loading. The dump function is a \textbf{singleton}: it skips re-dumping if the pickle file already exists.
+
+\section{Data Loader Architecture}
+
+The \texttt{VolleyballDataset} class in \texttt{src/data/data\_loader.py} is a generic PyTorch \texttt{Dataset} that loads from the pickle cache and supports all baseline models through constructor flags.
+
+\subsection{Constructor Parameters}
+
 \begin{itemize}
-    \item note that we have added `unknown` territory that we will assign for any unknown neighborhood 
+    \item \texttt{mode}: Dataset split --- \texttt{"train"}, \texttt{"validation"}, or \texttt{"test"}
+    \item \texttt{n\_frames}: Number of frames per clip (1 or 9). Must be a positive odd number.
+    \item \texttt{full\_image}: Return full-resolution frames (for B1, B4)
+    \item \texttt{crop}: Return per-person crops from bounding boxes (for B3, B5--B8)
+    \item \texttt{transform}: A torchvision transform pipeline
 \end{itemize}
-\begin{figure}
+
+\subsection{Return Shapes}
+
+\begin{table}[h]
     \centering
-    \includegraphics[width=0.75\linewidth]{figures/Traffic Volumne For Borough.png}
-    \caption{Traffic volume for each neighborhood}
-    \label{fig:traffic-volume}
-\end{figure}
-\section{Weather Data }
-data can be found in this \href{https://www.kaggle.com/datasets/mathijs/weather-data-in-new-york-city-2016?resource=download&select=weather_data_nyc_centralpark_2016%281%29.csv}{link}, which is pretty clean. We took all the data available, which I think has a huge impact on the trip duration, like
-\begin{itemize}
-    \item max temperature 
-    \item min temperature 
-    \item snow depth 
-    \item snowfall 
-\end{itemize}
+    \caption{Data loader output shapes by configuration}
+    \label{tab:loader-shapes}
+    \begin{tabular}{llp{4cm}}
+        \toprule
+        \textbf{Config} & \textbf{Baseline} & \textbf{Output} \\
+        \midrule
+        full, $T{=}1$  & B1 & (image, group\_label) \\
+        full, $T{=}9$  & B4 & (images $[T,C,H,W]$, group\_label) \\
+        crop, $T{=}1$  & B3 & (crops $[P,C,H,W]$, person\_labels $[P]$, group\_label) \\
+        crop, $T{=}9$  & B5--B8 & (crops $[T,P,C,H,W]$, person\_labels $[P]$, group\_label) \\
+        \bottomrule
+    \end{tabular}
+    \tabletext{$T$: number of frames, $P$: number of players (up to 12), $C$: channels, $H/W$: spatial dimensions.}
+\end{table}
 
-\section{Correlation matrix for all the features}
-You can check the correlation matrix in Fig. \ref{fig:correlation-matrix}
-\begin{figure}
+\subsection{Collate Function}
+
+A custom \texttt{collate\_fn} handles the variable number of players per clip by padding the player dimension to the batch maximum and returning a boolean mask tensor indicating valid player positions.
+
+\subsection{Person Boxes}
+
+For crops, the loader uses \textbf{tracking data} (which provides consistent player IDs across frames) as the primary source for bounding boxes, with a fallback to action detections. This is critical for temporal baselines (B5--B8) that need to track the same player across the 9-frame window.
+
+\section{Baseline Models Overview}
+
+The project implements a progressive series of baseline models, each adding complexity:
+
+\begin{table}[h]
     \centering
-    \includegraphics[width=1\linewidth]{figures/correlation matrix.png}
-    \caption{Correlation matrix for all the features, you can see  that we have lots of 0(s) but this does not mean that there is no relationship between these features and the output, \textbf{this only means that there is no linear relationship between them} but you will see that we got a reasonable performance in the modeling section}
-    \label{fig:correlation-matrix}
-\end{figure}
+    \caption{Baseline model characteristics}
+    \label{tab:baselines}
+    \begin{tabular}{lccc}
+        \toprule
+        \textbf{Model} & \textbf{Temporal} & \textbf{Player} & \textbf{Scene} \\
+        \midrule
+        B1 & --- & --- & Image clf. \\
+        B3 & --- & Crop clf. & Max-pool \\
+        B4 & LSTM & --- & LSTM \\
+        B5 & LSTM/player & Max-pool & NN \\
+        B6 & LSTM/image & Max-pool & LSTM \\
+        B7 & LSTM$_1$ + LSTM$_2$ & Max-pool & LSTM$_2$ \\
+        B8 & LSTM$_1$ + LSTM$_2$ & Team-split & LSTM$_2$ \\
+        \bottomrule
+    \end{tabular}
+\end{table}
 
-\section{Modeling}
-This work was for a closed context, the goal was to focus on feature Engineering, part of the problem not so much on modeling. We agreed to set the model to be `sklearn.linear\_modelRidge(alpha =1)` to compare our results with each other, and here are my results 
 \begin{itemize}
-    \item  I have used `PolynomialFeatures (degree=2)` \textbf{don't increase the degree over, you will overfit the data, at least this is what I got} 
-\end{itemize} 
-\textbf{You can find the results in this Table}\ref{tab:Final-Results}
-  \begin{table}[H]
-            \centering
-            \caption{scores over Train and Test Data }
-            \label{tab:Final-Results}
-            \begin{tabular}{lll}
-                \toprule
-                \textbf{Data} & \textbf{rms error} & $$R^2$ \textbf{score} \\
-                \midrule
-               Train & 0.3973 & 0.7146 \\
-                Test  & 0.4010 & 0.7106\\
-                
-                \bottomrule   
-            \end{tabular}
-			
-            \tabletext{Note: These results were tested over Kaggle-provided data}
-			
-        \end{table}
-
-\section{What could be Enhanced}
-\begin{itemize}
-     \item Better traffic volume data; extract avg. time/distance per borough & day-segment (e.g., \textbf{Qns-Man morn.}).
-    \item More granular weather (e.g., wind/trip direction); more explicit variable interactions (not just PolynomialFeatures).
-    \item Feature selection (e.g., top 500 from model).
-    \item Explore automatic feature engineering tools.
-   
+    \item \textbf{B1}: Fine-tune ResNet50 on the middle frame as an 8-class image classifier.
+    \item \textbf{B3}: Fine-tune ResNet50 on cropped persons (9 action classes), extract features, max-pool all players, train NN over 8 group classes.
+    \item \textbf{B4}: Extract frame-level representations using B1's backbone over 9 frames, train LSTM on the temporal sequence.
+    \item \textbf{B5}: LSTM on per-player temporal crops, max-pool player representations, classify with NN.
+    \item \textbf{B6}: Pool person features per frame, then LSTM on the image-level sequence.
+    \item \textbf{B7}: Full hierarchical model --- LSTM$_1$ per player, max-pool per frame, LSTM$_2$ on the frame sequence.
+    \item \textbf{B8}: Same as B7, but pools team 1 (6 players) and team 2 (6 players) separately, then concatenates.
 \end{itemize}
 
 
-	
+\section{Project Structure}
 
+The codebase is organized as follows:
+
+\begin{itemize}
+    \item \texttt{configs/} --- Centralised configuration: paths, splits, label mappings, and per-baseline Hydra YAML configs.
+    \item \texttt{src/json\_parser.py} --- Two-stage parsing pipeline.
+    \item \texttt{src/pickle\_dump.py} --- Singleton pickle dump/load utility.
+    \item \texttt{src/data/data\_loader.py} --- Generic PyTorch Dataset and collate function.
+    \item \texttt{src/data/data\_summary.py} --- Dataset statistics and class distributions.
+    \item \texttt{models/} --- Baseline model implementations (B1, B3, etc.).
+    \item \texttt{utils/utility.py} --- Shared training/evaluation helpers.
+\end{itemize}
 
 %----------------------------------------------------------
 

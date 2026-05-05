@@ -1,16 +1,16 @@
 """
-    in this model we will fine-tune a ResNet-50 backbone wrapped in a SequenceResNet class
-    to handle video sequences. 
+in this model we will fine-tune a ResNet-50 backbone wrapped in a SequenceResNet class
+to handle video sequences. 
 """
 
 # baseline3.py
-import hydra
-from omegaconf import DictConfig
-from pathlib import Path
 import sys
+from pathlib import Path
+
+import hydra
 import torch
-import torch.nn as nn
-import torch.optim as optim
+from omegaconf import DictConfig
+from torch import nn, optim
 from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
 from torchvision import models, transforms
@@ -19,8 +19,14 @@ from torchvision import models, transforms
 BASE_DIR = Path(__file__).resolve().parent.parent
 sys.path.append(str(BASE_DIR))
 
-from utils.utility import save_model, train_one_epoch, validate_one_epoch, test_one_epoch, load_model  # noqa: E402
 from src.data.data_loader import VolleyballDataset, collate_fn  # noqa: E402
+from utils.utility import (  # noqa: E402
+    load_model,
+    save_model,
+    test_one_epoch,
+    train_one_epoch,
+    validate_one_epoch,
+)
 
 # =================================================================
 # === 1. MODEL CLASS (Moved to Global Scope) ===
@@ -37,10 +43,10 @@ class SequenceResNet(nn.Module):
         super().__init__()
         self.backbone = backbone
         self.frame_chunk_size = frame_chunk_size
-    
+
     def forward(self, x):
          # Frame-wise Processing with Late Fusion
-         
+
         # If input is 5D: [B, players, C, H, W] -> process frames individually
         if x.dim() == 5:
             B, T, C, H, W = x.shape
@@ -188,7 +194,7 @@ def train_test(cfg: DictConfig) -> None:
         print(f"\n--- Epoch {epoch + 1}/{cfg.num_epochs} ---")
 
         train_loss, train_acc, train_f1 = train_one_epoch(
-            model, train_loader, criterion, optimizer, device, class_to_idx
+            model, train_loader, criterion, optimizer, device, class_to_idx,
         )
 
         val_loss, val_acc, val_f1 = validate_one_epoch(model, val_loader, criterion, device, class_to_idx)
@@ -216,7 +222,7 @@ def train_test(cfg: DictConfig) -> None:
     best_model, _, _, _, loaded_idx = load_model("baseline3", best_model)
     best_model.to(device)
 
-    final_map = loaded_idx if loaded_idx else class_to_idx
+    final_map = loaded_idx or class_to_idx
 
     test_loss, test_acc, test_f1 = test_one_epoch(best_model, test_loader, criterion, device, final_map)
 
