@@ -6,14 +6,14 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 
 DATA_DIR = BASE_DIR / "DataSet"
 MODEL_SAVE_DIR = BASE_DIR / "saved_models"
-MAIN_DATASET_DIR = DATA_DIR / "volleyball_"
+MAIN_DATASET_DIR = DATA_DIR / "volleyball_" / "videos"
 
 VIDEO_SAMPLE_DIR = DATA_DIR / "videos_sample"
-VIDEOS_DIR = DATA_DIR / "volleyball_"/"videos"
+VIDEOS_DIR = MAIN_DATASET_DIR
 
 VOLLEYBALL_DETECTION_DIR = DATA_DIR / "volleyball-detections"
 VOLLEYBALL_TRACKING_DIR = DATA_DIR / "volleyball_tracking_annotation"
-VOLLEYBALL_ANNOTATIONS_DIR = MAIN_DATASET_DIR/"videos"
+VOLLEYBALL_ANNOTATIONS_DIR = MAIN_DATASET_DIR
 # video samples
 VIDEO_SAMPLE1_DIR = VIDEO_SAMPLE_DIR / "7" / "38025"
 VIDEO_SAMPLE2_DIR = VIDEO_SAMPLE_DIR / "7" / "51725"
