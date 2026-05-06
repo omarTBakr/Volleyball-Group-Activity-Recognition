@@ -5,21 +5,20 @@ import os
 ON_KAGGLE = Path('/kaggle/input').exists()
 
 if ON_KAGGLE:
-    # !! Set this to your dataset slug (the part after the username in the URL)
-    # e.g. for kaggle.com/datasets/ahmedmohamed365/volleyball → slug = "volleyball"
-    # Run `!ls /kaggle/input` in your notebook to confirm the exact folder name.
-    KAGGLE_DATASET_SLUG = "datasets"
-
-    KAGGLE_INPUT_DIR  = Path('/kaggle/input') / KAGGLE_DATASET_SLUG
+    # Kaggle mounts this dataset at this exact path (confirmed via !find)
+    KAGGLE_INPUT_DIR  = Path('/kaggle/input/datasets/ahmedmohamed365/volleyball')
     KAGGLE_OUTPUT_DIR = Path('/kaggle/working')
 
     # ── Source data (read-only on Kaggle) ──────────────────────────────────────
-    DATA_DIR                  = KAGGLE_INPUT_DIR
-    MAIN_DATASET_DIR          = KAGGLE_INPUT_DIR / "volleyball_" / "videos"
-    VIDEO_SAMPLE_DIR          = KAGGLE_INPUT_DIR / "videos_sample"
-    VIDEOS_DIR                = MAIN_DATASET_DIR
-    VOLLEYBALL_DETECTION_DIR  = KAGGLE_INPUT_DIR / "volleyball-detections"
-    VOLLEYBALL_TRACKING_DIR   = KAGGLE_INPUT_DIR / "volleyball_tracking_annotation"
+    # Note: Kaggle double-nested each folder when the dataset was uploaded,
+    # e.g. volleyball-detections/volleyball-detections/. volleyball_/videos is
+    # the only exception — it has no double nesting.
+    DATA_DIR                   = KAGGLE_INPUT_DIR
+    MAIN_DATASET_DIR           = KAGGLE_INPUT_DIR / "volleyball_" / "videos"
+    VIDEO_SAMPLE_DIR           = KAGGLE_INPUT_DIR / "videos_sample" / "videos_sample"
+    VIDEOS_DIR                 = MAIN_DATASET_DIR
+    VOLLEYBALL_DETECTION_DIR   = KAGGLE_INPUT_DIR / "volleyball-detections" / "volleyball-detections"
+    VOLLEYBALL_TRACKING_DIR    = KAGGLE_INPUT_DIR / "volleyball_tracking_annotation" / "volleyball_tracking_annotation"
     VOLLEYBALL_ANNOTATIONS_DIR = MAIN_DATASET_DIR
 
     # ── Generated/cached files → writable working dir ──────────────────────────
@@ -54,6 +53,7 @@ if ON_KAGGLE:
     KAGGLE_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
 # ── Video samples (local convenience paths) ────────────────────────────────────
+# On Kaggle, VIDEO_SAMPLE_DIR already points to the inner videos_sample/ folder
 VIDEO_SAMPLE1_DIR = VIDEO_SAMPLE_DIR / "7"  / "38025"
 VIDEO_SAMPLE2_DIR = VIDEO_SAMPLE_DIR / "7"  / "51725"
 VIDEO_SAMPLE3_DIR = VIDEO_SAMPLE_DIR / "10" / "18360"
