@@ -118,7 +118,7 @@ def dump_frames_to_lmdb(
 
         # Store the key index for fast enumeration
         txn.put(
-            _KEYS_META_KEY, pickle.dumps(all_keys, protocol=pickle.HIGHEST_PROTOCOL)
+            _KEYS_META_KEY, pickle.dumps(all_keys, protocol=pickle.HIGHEST_PROTOCOL),
         )
         txn.commit()
     except BaseException:

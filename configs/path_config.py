@@ -1,13 +1,12 @@
 from pathlib import Path
-import os
 
 # ── Environment detection ──────────────────────────────────────────────────────
-ON_KAGGLE = Path('/kaggle/input').exists()
+ON_KAGGLE = Path("/kaggle/input").exists()
 
 if ON_KAGGLE:
     # Kaggle mounts this dataset at this exact path (confirmed via !find)
-    KAGGLE_INPUT_DIR  = Path('/kaggle/input/datasets/ahmedmohamed365/volleyball')
-    KAGGLE_OUTPUT_DIR = Path('/kaggle/working')
+    KAGGLE_INPUT_DIR  = Path("/kaggle/input/datasets/ahmedmohamed365/volleyball")
+    KAGGLE_OUTPUT_DIR = Path("/kaggle/working")
 
     # ── Source data (read-only on Kaggle) ──────────────────────────────────────
     # Note: Kaggle double-nested each folder when the dataset was uploaded,
@@ -24,6 +23,7 @@ if ON_KAGGLE:
     # ── Generated/cached files → writable working dir ──────────────────────────
     _GEN_DIR           = KAGGLE_OUTPUT_DIR
     MODEL_SAVE_DIR     = KAGGLE_OUTPUT_DIR / "saved_models"
+
 
 else:
     # ── Local paths (unchanged from original) ──────────────────────────────────
@@ -46,9 +46,11 @@ JSON_DATA_DIR    = _GEN_DIR / "volleyball_master.json"
 PICKLE_DUMP_DIR  = _GEN_DIR / "volleyball_master_pickle.pkl"
 FRAMES_DUMP_DIR  = _GEN_DIR / "frames_paths_to_images.pkl"
 FRAMES_LMDB_DIR  = _GEN_DIR / "frames_lmdb"
+PLOTS_DIR        = _GEN_DIR / "plots"
 
 # Ensure writable dirs exist at import time
 MODEL_SAVE_DIR.mkdir(parents=True, exist_ok=True)
+PLOTS_DIR.mkdir(parents=True, exist_ok=True)
 if ON_KAGGLE:
     KAGGLE_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 

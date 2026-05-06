@@ -1,3 +1,4 @@
+import random
 
 import cv2
 from matplotlib import pyplot as plt
@@ -10,10 +11,16 @@ from configs.path_config import (
     VIDEO_SAMPLE5_DIR,
 )
 
-videos_dir = [VIDEO_SAMPLE1_DIR , VIDEO_SAMPLE2_DIR , VIDEO_SAMPLE3_DIR , VIDEO_SAMPLE4_DIR , VIDEO_SAMPLE5_DIR]
+videos_dir = [
+    VIDEO_SAMPLE1_DIR,
+    VIDEO_SAMPLE2_DIR,
+    VIDEO_SAMPLE3_DIR,
+    VIDEO_SAMPLE4_DIR,
+    VIDEO_SAMPLE5_DIR,
+]
 
 
-def visualize_data( n_pictures = 5 , video = False , n_videos = 2):
+def visualize_data(n_pictures=5, video=False, n_videos=2):
     """
     Visualizes a sample of the data set by displaying a grid of images with their corresponding labels.
 
@@ -21,7 +28,7 @@ def visualize_data( n_pictures = 5 , video = False , n_videos = 2):
         n_pictures (int): The number of images to display in the grid (default is 8)
         video (bool): Whether to display videos instead of images (default is False)
         n_videos (int): The number of videos to display (default is 2)
-    
+
     Note : this is the hirarchachy of the dataset :
     dataset/
     ├── main_dataset/
@@ -46,7 +53,7 @@ def visualize_data( n_pictures = 5 , video = False , n_videos = 2):
         visualize_images(n_pictures)
 
 
-def visualize_videos(n_videos = 2):
+def visualize_videos(n_videos=2):
     """
     Visualizes a sample of the videos in the dataset by displaying them.
 
@@ -60,7 +67,6 @@ def visualize_videos(n_videos = 2):
     out = cv2.VideoWriter("output.mp4", fourcc, 10, (640, 480))
 
     for directory in videos_dir[:n_videos]:
-
         for frame in reversed(list(directory.iterdir())):
             if frame.is_file() and frame.suffix == ".jpg":
                 frame = cv2.imread(str(frame))
@@ -75,19 +81,21 @@ def visualize_videos(n_videos = 2):
     out.release()
     cv2.destroyAllWindows()
 
+
 # the below code with parse the data into a big json
 # then we will verify the data correctness
 
 
 # Run the process
 
+
 def visualize_images(n_pictures=5):
     """
     Visualizes a sample of the images in the dataset by displaying a grid of images with their corresponding labels.
 
     Args:
-        n_pictures (int): The number of images to display in the grid (default is 5) will display 5 * 5 images = 25 images total , 5 from each video_sample directory 
-        will choose frames from (2 before the middle  + middle + 2 after middle ) 
+        n_pictures (int): The number of images to display in the grid (default is 5) will display 5 * 5 images = 25 images total , 5 from each video_sample directory
+        will choose frames from (2 before the middle  + middle + 2 after middle )
 
     """
     assert n_pictures % 2 == 1, "n_pictures must be odd"
@@ -95,9 +103,9 @@ def visualize_images(n_pictures=5):
 
     for directory in videos_dir:
         # We list all jpgs to find the actual count , note this is valid because they are numbered sequentially , so the middle index will be the middle frame
-        all_frames = sorted(directory.glob("*.jpg"),key=lambda x: int(x.stem))
+        all_frames = sorted(directory.glob("*.jpg"), key=lambda x: int(x.stem))
 
-        if not all_frames: # if the directory is empty skip it
+        if not all_frames:  # if the directory is empty skip it
             continue
 
         mid_idx = len(all_frames) // 2
@@ -127,21 +135,22 @@ def visualize_images(n_pictures=5):
     plt.tight_layout()
     plt.show()
 
+
 from configs.path_config import MAIN_DATASET_DIR
 from src.pickle_dump import load_from_pickle
 
 # ── Color palette for person actions ────────────────────────────────────────
 
 ACTION_COLORS = {
-    "blocking":  (255,   0,   0),   # red
-    "digging":   (  0, 200,   0),   # green
-    "falling":   (255, 165,   0),   # orange
-    "jumping":   (  0,   0, 255),   # blue
-    "moving":    (128,   0, 128),   # purple
-    "setting":   (  0, 255, 255),   # cyan
-    "spiking":   (255, 255,   0),   # yellow
-    "standing":  (128, 128, 128),   # gray
-    "waiting":   (255, 105, 180),   # pink
+    "blocking": (255, 0, 0),  # red
+    "digging": (0, 200, 0),  # green
+    "falling": (255, 165, 0),  # orange
+    "jumping": (0, 0, 255),  # blue
+    "moving": (128, 0, 128),  # purple
+    "setting": (0, 255, 255),  # cyan
+    "spiking": (255, 255, 0),  # yellow
+    "standing": (128, 128, 128),  # gray
+    "waiting": (255, 105, 180),  # pink
 }
 DEFAULT_COLOR = (200, 200, 200)
 
@@ -163,8 +172,6 @@ def visualize_video_fully_annotated(n_clips=3, save_path=None):
         If provided, save the figure instead of showing it.
 
     """
-    import random
-
     master_data = load_from_pickle()
 
     # Pick n_clips random clips
@@ -215,14 +222,22 @@ def visualize_video_fully_annotated(n_clips=3, save_path=None):
             (tw, th), _ = cv2.getTextSize(label_text, cv2.FONT_HERSHEY_SIMPLEX, 0.45, 1)
             cv2.rectangle(img, (x1, y1 - th - 6), (x1 + tw + 4, y1), color, -1)
             cv2.putText(
-                img, label_text, (x1 + 2, y1 - 4),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 255, 255), 1, cv2.LINE_AA,
+                img,
+                label_text,
+                (x1 + 2, y1 - 4),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.45,
+                (255, 255, 255),
+                1,
+                cv2.LINE_AA,
             )
 
         # Title: group activity
         scene_class = clip_data.get("scene_class", "unknown")
         ax.imshow(img)
-        ax.set_title(f"{clip_key}\nGroup Activity: {scene_class}", fontsize=12, fontweight="bold")
+        ax.set_title(
+            f"{clip_key}\nGroup Activity: {scene_class}", fontsize=12, fontweight="bold",
+        )
         ax.axis("off")
 
     plt.tight_layout()
@@ -237,4 +252,3 @@ if __name__ == "__main__":
     # visualize_data(video=True, n_videos=4)
     # visualize_data(video=False, n_pictures=5)
     visualize_video_fully_annotated(n_clips=3)
-

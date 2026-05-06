@@ -17,9 +17,9 @@ from __future__ import annotations
 
 import torch  # ty:ignore[unresolved-import]
 from PIL import Image
-from torch.utils.data import Dataset,DataLoader  # ty:ignore[unresolved-import]
-from torchvision.transforms import ToTensor  # ty:ignore[unresolved-import]
+from torch.utils.data import DataLoader, Dataset  # ty:ignore[unresolved-import]
 from torchvision import transforms  # ty:ignore[unresolved-import]
+from torchvision.transforms import ToTensor  # ty:ignore[unresolved-import]
 
 from configs.data_split import (
     TEST_VIDEOS_NUMBERS,
@@ -45,15 +45,15 @@ def _get_frame_index() -> dict[tuple[str, str], list[str]]:
     global _FRAME_INDEX_CACHE
     if _FRAME_INDEX_CACHE is None:
         keys = get_all_frame_keys()
-        
+
         index: dict[tuple[str, str], list[str]] = {}
         for key in keys:
             vid, cid, fname = key.split("/", 2)
             index.setdefault((vid, cid), []).append(fname)
-            
+
         for v in index.values():
             v.sort()
-            
+
         _FRAME_INDEX_CACHE = index
     return _FRAME_INDEX_CACHE
 
@@ -211,15 +211,15 @@ class VolleyballDataset(Dataset):
 
     def _load_image(self, video_id: str, clip_id: str, frame_name: str) -> Image.Image:
         """Decode a frame directly from the memory-mapped LMDB."""
-        key = f"{video_id}/{clip_id}/{frame_name}".encode("utf-8")
-        
+        key = f"{video_id}/{clip_id}/{frame_name}".encode()
+
         env = open_frames_lmdb()
         with env.begin() as txn:
             raw = txn.get(key)
-            
+
         if raw is None:
             raise KeyError(f"Frame not found in LMDB: {key.decode('utf-8')}")
-            
+
         return decode_frame(raw)
 
     def _get_persons_for_frame(
