@@ -27,6 +27,8 @@ from pathlib import Path
 from configs.path_config import (
     JSON_DATA_DIR,
     VOLLEYBALL_ANNOTATIONS_DIR,
+    VOLLEYBALL_DETECTION_DIR,
+    VOLLEYBALL_TRACKING_DIR,
 )
 
 logging.basicConfig(level=logging.INFO)
@@ -365,10 +367,10 @@ def enrich_with_scene_labels(
 if __name__ == "__main__":
     # ── Stage 1: create the master JSON from detections + tracking ──
     # Uncomment to re-generate (takes a while on the full 60G dataset):
-    # create_master_json(
-    #     detection_dir=VOLLEYBALL_DETECTION_DIR,
-    #     tracking_dir=VOLLEYBALL_TRACKING_DIR,
-    # )
+    create_master_json(
+        detection_dir=VOLLEYBALL_DETECTION_DIR,
+        tracking_dir=VOLLEYBALL_TRACKING_DIR,
+    )
 
     # ── Stage 2: enrich with scene-level group-activity labels ──
     enrich_with_scene_labels()
