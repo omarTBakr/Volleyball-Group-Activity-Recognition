@@ -155,7 +155,7 @@ def count_annotations(directory):
     Parameters
     ----------
     directory : Path
-        The main dataset directory containing video subdirectories.
+        The videos dataset directory containing video subdirectories.
 
     Returns
     -------
@@ -202,7 +202,7 @@ def merge_dictionaries(dictionaries):
 
 if __name__ == "__main__":
     # video_count = count_directories(MAIN_DATASET_DIR)
-    # print(f"Total number of videos in the main dataset: {video_count}")
+    # print(f"Total number of videos in the dataset: {video_count}")
     # # For each video, count the number of clips (subdirectories)
     # for video_folder in MAIN_DATASET_DIR.iterdir():
     #     if video_folder.is_dir():

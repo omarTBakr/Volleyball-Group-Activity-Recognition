@@ -26,7 +26,7 @@ graph TB
     subgraph "Raw Dataset (60GB)"
         A[volleyball-detections/] -->|action_detections.txt<br>person_detections.txt| P
         B[volleyball_tracking_annotation/] -->|clip_id.txt| P
-        C[main dataset/] -->|annotations.txt| E
+        C[volleyball_/videos/] -->|annotations.txt| E
         C -->|.jpg frames| DL
     end
 
@@ -111,7 +111,7 @@ flowchart LR
 
 ```
 DataSet/
-├── main dataset/                          # Raw video frames + annotations
+├── volleyball_/videos/                    # Raw video frames + annotations
 │   ├── 0/                                 # Video 0
 │   │   ├── annotations.txt               # Group activity + person boxes per clip
 │   │   ├── 3596/                          # Clip (middle frame = 3596)

@@ -46,7 +46,7 @@ def dump_frames_to_pickle(
     output_path: Path = FRAMES_DUMP_DIR,
 ) -> None:
     """
-    Walk the main dataset and store every .jpg frame's raw bytes in a pickle.
+    Walk the videos dataset and store every .jpg frame's raw bytes in a pickle.
 
     **Singleton behaviour**: if *output_path* already exists the function
     returns immediately without re-dumping.
@@ -54,7 +54,7 @@ def dump_frames_to_pickle(
     Parameters
     ----------
     dataset_dir : Path
-        Root of ``main dataset/`` containing video subdirectories.
+        Root of ``volleyball_/videos/`` containing video subdirectories.
     output_path : Path
         Destination pickle file.
 

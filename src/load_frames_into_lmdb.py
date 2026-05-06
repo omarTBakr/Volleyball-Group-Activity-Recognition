@@ -61,7 +61,7 @@ def dump_frames_to_lmdb(
     map_size: int = _DEFAULT_MAP_SIZE,
 ) -> None:
     """
-    Walk the main dataset and store every .jpg frame in an LMDB database.
+    Walk the videos dataset and store every .jpg frame in an LMDB database.
 
     **Singleton behaviour**: if *output_path* already exists the function
     returns immediately without re-dumping.
@@ -69,7 +69,7 @@ def dump_frames_to_lmdb(
     Parameters
     ----------
     dataset_dir : Path
-        Root of ``main dataset/`` containing video subdirectories.
+        Root of ``volleyball_/videos/`` containing video subdirectories.
     output_path : Path
         Destination LMDB directory.
     map_size : int

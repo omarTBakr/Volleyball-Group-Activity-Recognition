@@ -11,7 +11,7 @@ Stage 1 — Player-level parsing (create_master_json):
         - "tracking": dict[frame_name -> list of {id, box, flags, action}] (tracked players)
 
 Stage 2 — Scene-level enrichment (parse_scene_annotations + merge_dataset_levels):
-    Reads each video's annotations.txt from the main dataset directory to extract
+    Reads each video's annotations.txt from the videos dataset directory to extract
     the group-activity label (one of 8 scene classes) per clip, then merges it
     into the master JSON under a new "scene_class" key per clip.
 
@@ -322,6 +322,7 @@ def enrich_with_scene_labels(
     save: bool = True,
 ) -> dict:
     """
+
     Stage 2 — Load the master JSON and enrich each clip with its scene-level
     group-activity label parsed from each video's annotations.txt.
 
@@ -340,7 +341,7 @@ def enrich_with_scene_labels(
     dict
         The enriched master dictionary with ``"scene_class"`` per clip.
 
-    """
+    """  # noqa: D205
     master_data = load_verified_json(json_path)
 
     # annotations.txt lives at the *video* level, not per-clip
