@@ -87,14 +87,22 @@ flowchart LR
 
 `enrich_with_scene_labels()` reads each video's `annotations.txt` to extract the **group-activity label** (one of 8 scene classes) and attaches it to each clip as `"scene_class"`.
 
-### Pickle Caching
+### Pickle & LMDB Caching
 
-The enriched JSON (~1.6 GB) is dumped to pickle (~247 MB) for fast loading. `dump_to_pickle()` is a **singleton** — it skips dumping if the pickle already exists.
+To avoid severe I/O bottlenecks and RAM exhaustion during training, the dataset is cached in two high-performance formats:
+
+1. **Annotations (Pickle)**: The enriched JSON (~1.6 GB) is dumped to pickle (`volleyball_master_pickle.pkl`, ~247 MB) for instantaneous metadata loading.
+2. **Frames (LMDB)**: The raw `.jpg` frames (~50 GB) are packed into a memory-mapped LMDB database (`frames_lmdb`) to allow lightning-fast lazy loading of image bytes on the fly.
+
+Both build scripts are **singletons** — they skip execution if the database already exists.
 
 ```mermaid
 flowchart LR
-    JSON["volleyball_master.json<br>(1.6 GB, slow)"] -->|dump_to_pickle| PKL["volleyball_master_pickle.pkl<br>(247 MB, fast)"]
-    PKL -->|load_from_pickle| DS[VolleyballDataset]
+    JSON["volleyball_master.json<br>(1.6 GB)"] -->|src.pickle_dump| PKL["volleyball_master_pickle.pkl<br>(247 MB)"]
+    RAW["Raw .jpg frames<br>(~50 GB)"] -->|src.load_frames_into_lmdb| LMDB["frames_lmdb<br>(Memory-mapped)"]
+    
+    PKL --> DS[VolleyballDataset]
+    LMDB --> DS
 ```
 
 ---
@@ -284,16 +292,19 @@ Project1/
 pip install -r requirements.txt
 ```
 
-### 2. Parse the Dataset (one-time)
+### 2. Prepare the Dataset (one-time)
+
+Execute the following commands in order to build the caching databases:
 
 ```bash
-# Stage 1: Build master JSON from detections + tracking
+# Step 1: Build master JSON from detections + tracking and enrich with scene labels
 python -m src.json_parser
 
-# Stage 2 is called automatically in the same script
-
-# Dump to pickle for fast loading
+# Step 2: Dump annotations to pickle for fast loading
 python -m src.pickle_dump
+
+# Step 3: Pack raw frames into a high-performance memory-mapped LMDB database
+python -m src.load_frames_into_lmdb
 ```
 
 ### 3. Verify the Loader

@@ -78,7 +78,8 @@ def dump_frames_to_lmdb(
     """
     if output_path.exists():
         logger.info(
-            "Frames LMDB already exists at %s — skipping dump.", output_path,
+            "Frames LMDB already exists at %s — skipping dump.",
+            output_path,
         )
         return
 
@@ -116,7 +117,9 @@ def dump_frames_to_lmdb(
                     txn = env.begin(write=True)
 
         # Store the key index for fast enumeration
-        txn.put(_KEYS_META_KEY, pickle.dumps(all_keys, protocol=pickle.HIGHEST_PROTOCOL))
+        txn.put(
+            _KEYS_META_KEY, pickle.dumps(all_keys, protocol=pickle.HIGHEST_PROTOCOL)
+        )
         txn.commit()
     except BaseException:
         txn.abort()
@@ -125,9 +128,7 @@ def dump_frames_to_lmdb(
     env.close()
 
     logger.info("Total frames written: %d", frame_count)
-    size_gb = sum(
-        f.stat().st_size for f in output_path.iterdir()
-    ) / (1024**3)
+    size_gb = sum(f.stat().st_size for f in output_path.iterdir()) / (1024**3)
     logger.info("Done. LMDB size: %.2f GB", size_gb)
 
 
@@ -188,14 +189,14 @@ def get_all_frame_keys(path: Path = FRAMES_LMDB_DIR) -> list[str]:
     """
     if not path.exists():
         raise FileNotFoundError(f"Frames LMDB not found at {path}")
-        
+
     env = lmdb.open(str(path), readonly=True, lock=False)
     try:
         with env.begin() as txn:
             keys_bytes = txn.get(_KEYS_META_KEY)
     finally:
         env.close()
-        
+
     if not keys_bytes:
         return []
     return pickle.loads(keys_bytes)
@@ -257,7 +258,9 @@ def decode_frame(raw_bytes: bytes) -> Image.Image:
 
 
 def get_frame_list_for_clip(
-    frames_data: dict[str, bytes], video_id: str, clip_id: str,
+    frames_data: dict[str, bytes],
+    video_id: str,
+    clip_id: str,
 ) -> list[str]:
     """
     Return sorted frame names available for a given clip.
@@ -278,11 +281,7 @@ def get_frame_list_for_clip(
 
     """
     prefix = f"{video_id}/{clip_id}/"
-    return sorted(
-        key.split("/", 2)[2]
-        for key in frames_data
-        if key.startswith(prefix)
-    )
+    return sorted(key.split("/", 2)[2] for key in frames_data if key.startswith(prefix))
 
 
 # ── Main ────────────────────────────────────────────────────────────────────

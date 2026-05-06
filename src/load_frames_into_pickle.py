@@ -61,7 +61,8 @@ def dump_frames_to_pickle(
     """
     if output_path.exists():
         logger.info(
-            "Frames pickle already exists at %s — skipping dump.", output_path,
+            "Frames pickle already exists at %s — skipping dump.",
+            output_path,
         )
         return
 
@@ -96,7 +97,7 @@ def dump_frames_to_pickle(
     with output_path.open("wb") as f:
         pickle.dump(frames, f, protocol=pickle.HIGHEST_PROTOCOL)
 
-    size_gb = output_path.stat().st_size / (1024 ** 3)
+    size_gb = output_path.stat().st_size / (1024**3)
     logger.info("Done. Pickle size: %.2f GB", size_gb)
 
 
@@ -152,7 +153,9 @@ def decode_frame(raw_bytes: bytes) -> Image.Image:
 
 
 def get_frame_list_for_clip(
-    frames_data: dict[str, bytes], video_id: str, clip_id: str,
+    frames_data: dict[str, bytes],
+    video_id: str,
+    clip_id: str,
 ) -> list[str]:
     """
     Return sorted frame names available for a given clip in the pickle.
@@ -173,11 +176,7 @@ def get_frame_list_for_clip(
 
     """
     prefix = f"{video_id}/{clip_id}/"
-    return sorted(
-        key.split("/", 2)[2]
-        for key in frames_data
-        if key.startswith(prefix)
-    )
+    return sorted(key.split("/", 2)[2] for key in frames_data if key.startswith(prefix))
 
 
 # ── Main ────────────────────────────────────────────────────────────────────
