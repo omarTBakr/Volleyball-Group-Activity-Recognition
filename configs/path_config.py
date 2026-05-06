@@ -8,7 +8,7 @@ if ON_KAGGLE:
     # !! Set this to your dataset slug (the part after the username in the URL)
     # e.g. for kaggle.com/datasets/ahmedmohamed365/volleyball → slug = "volleyball"
     # Run `!ls /kaggle/input` in your notebook to confirm the exact folder name.
-    KAGGLE_DATASET_SLUG = "volleyball"
+    KAGGLE_DATASET_SLUG = "dataset"
 
     KAGGLE_INPUT_DIR  = Path('/kaggle/input') / KAGGLE_DATASET_SLUG
     KAGGLE_OUTPUT_DIR = Path('/kaggle/working')
