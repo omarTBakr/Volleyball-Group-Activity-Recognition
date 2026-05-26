@@ -9,6 +9,7 @@ should import paths from here rather than hardcoding them.
 from pathlib import Path
 
 # ── Environment detection ────────────────────────────────────────────────────
+BASE_DIR = Path(__file__).resolve().parent.parent
 ON_KAGGLE = Path("/kaggle/input").exists()
 
 if ON_KAGGLE:
@@ -31,7 +32,6 @@ if ON_KAGGLE:
 
 else:
     # ── Local paths ──────────────────────────────────────────────────────
-    BASE_DIR = Path(__file__).resolve().parent.parent
 
     DATA_DIR                   = BASE_DIR / "DataSet"
     MODEL_SAVE_DIR             = BASE_DIR / "saved_models"
