@@ -27,6 +27,7 @@ if ON_KAGGLE:
     # ── Generated / cached files → writable working dir ──────────────────
     _GEN_DIR       = KAGGLE_OUTPUT_DIR
     MODEL_SAVE_DIR = KAGGLE_OUTPUT_DIR / "saved_models"
+    LOGS_DIR       = KAGGLE_OUTPUT_DIR / "logs"
 
 else:
     # ── Local paths ──────────────────────────────────────────────────────
@@ -34,6 +35,7 @@ else:
 
     DATA_DIR                   = BASE_DIR / "DataSet"
     MODEL_SAVE_DIR             = BASE_DIR / "saved_models"
+    LOGS_DIR                   = BASE_DIR / "logs"
     MAIN_DATASET_DIR           = DATA_DIR / "volleyball_" / "videos"
     VIDEO_SAMPLE_DIR           = DATA_DIR / "videos_sample"
     VIDEOS_DIR                 = MAIN_DATASET_DIR
@@ -53,6 +55,7 @@ PLOTS_DIR       = BASE_DIR / "plots"
 # Ensure writable directories exist at import time
 MODEL_SAVE_DIR.mkdir(parents=True, exist_ok=True)
 PLOTS_DIR.mkdir(parents=True, exist_ok=True)
+LOGS_DIR.mkdir(parents=True, exist_ok=True)
 if ON_KAGGLE:
     KAGGLE_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -83,6 +86,7 @@ if __name__ == "__main__":
     print(f"  Pickle cache:      {PICKLE_DUMP_DIR}")
     print(f"  LMDB frames:       {FRAMES_LMDB_DIR}")
     print(f"  Plots:             {PLOTS_DIR}")
+    print(f"  Logs:              {LOGS_DIR}")
     print()
     print("Path validation:")
     validate_paths()

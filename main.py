@@ -1,4 +1,3 @@
-
 def main():
     print("Hello from project1!")
 

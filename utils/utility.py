@@ -108,10 +108,29 @@ def train_one_epoch(
     """
     Train the model for a single epoch.
 
+    Iterates over every batch in *dataloader*, performing forward pass,
+    loss computation, back-propagation, and optimizer step.  Epoch-level
+    metrics are computed from the accumulated predictions.
+
+    Parameters
+    ----------
+    model : nn.Module
+        The model to train.  Will be set to ``model.train()`` mode.
+    dataloader : DataLoader
+        Training data loader.
+    criterion : nn.Module
+        Loss function (e.g. ``nn.CrossEntropyLoss()``).
+    optimizer : optim.Optimizer
+        Optimizer instance used to update model weights.
+    device : torch.device
+        Target device (``"cpu"`` or ``"cuda"``).
+
     Returns
     -------
-    tuple
-        ``(loss, accuracy, f1_score, confusion_matrix)``
+    tuple[float, float, float, np.ndarray]
+        ``(loss, accuracy, f1_score, confusion_matrix)`` where loss is
+        the mean batch loss, accuracy and F1 are macro-averaged, and
+        confusion_matrix has shape ``(n_classes, n_classes)``.
 
     """
     y_true: list[int] = []
@@ -155,10 +174,25 @@ def validate_one_epoch(
     """
     Validate the model for a single epoch (no gradient computation).
 
+    Identical to :func:`train_one_epoch` except that the model is placed
+    in ``eval()`` mode and all forward passes run inside
+    ``torch.no_grad()``.
+
+    Parameters
+    ----------
+    model : nn.Module
+        The model to evaluate.
+    dataloader : DataLoader
+        Validation data loader.
+    criterion : nn.Module
+        Loss function.
+    device : torch.device
+        Target device.
+
     Returns
     -------
-    tuple
-        ``(loss, accuracy, f1_score, confusion_matrix)``
+    tuple[float, float, float, np.ndarray]
+        ``(loss, accuracy, f1_score, confusion_matrix)``.
 
     """
     y_true: list[int] = []
@@ -198,12 +232,27 @@ def test_one_epoch(
     device: torch.device,
 ) -> tuple[float, float, float, np.ndarray]:
     """
-    Evaluate the model on the test set (identical to validation, separate for clarity).
+    Evaluate the model on the test set.
+
+    Functionally identical to :func:`validate_one_epoch` but kept as a
+    separate function so callers can distinguish validation from final
+    test evaluation in logs and progress bars.
+
+    Parameters
+    ----------
+    model : nn.Module
+        The trained model to evaluate.
+    dataloader : DataLoader
+        Test data loader.
+    criterion : nn.Module
+        Loss function.
+    device : torch.device
+        Target device.
 
     Returns
     -------
-    tuple
-        ``(loss, accuracy, f1_score, confusion_matrix)``
+    tuple[float, float, float, np.ndarray]
+        ``(loss, accuracy, f1_score, confusion_matrix)``.
 
     """
     y_true: list[int] = []

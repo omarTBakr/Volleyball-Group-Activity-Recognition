@@ -8,9 +8,15 @@ Uses:
     - Full image mode, ``n_frames=1`` (middle frame only)
     - Standard cross-entropy loss
     - Config-driven via Hydra (``configs/baseline1.yaml``)
+
+Class names and ``num_classes`` are sourced from
+:mod:`configs.labels` so that the YAML only holds hyper-parameters.
 """
 
 from __future__ import annotations
+
+import json
+from datetime import datetime
 
 import hydra
 import torch
@@ -18,8 +24,14 @@ from omegaconf import DictConfig
 from torch import nn, optim
 from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
+from torchvision import models
 
-from configs.labels import NUM_GROUP_ACTIVITIES
+from configs.labels import (
+    GROUP_ACTIVITY_TO_IDX,
+    IDX_TO_GROUP_ACTIVITY,
+    NUM_GROUP_ACTIVITIES,
+)
+from configs.path_config import LOGS_DIR
 from src.data.kaggle_data_loader import VolleyballDataset, collate_fn
 from utils.load_model_config import build_model, build_scheduler, build_transforms
 from utils.utility import (
@@ -40,13 +52,13 @@ class Model(nn.Module):
 
     def __init__(self, num_classes: int = NUM_GROUP_ACTIVITIES) -> None:
         super().__init__()
-        from torchvision import models
 
         self.num_classes = num_classes
         self.backbone = models.resnet50(weights=models.ResNet50_Weights.DEFAULT)
         self.backbone.fc = nn.Linear(self.backbone.fc.in_features, num_classes)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """Forward pass through the ResNet-50 backbone."""
         return self.backbone(x)
 
 
@@ -57,9 +69,22 @@ class Model(nn.Module):
 
 @hydra.main(config_path="../configs", config_name="baseline1", version_base=None)
 def train_test(cfg: DictConfig) -> None:
+    """Run the full train → validate → test pipeline for Baseline 1."""
     torch.manual_seed(cfg.seed)
     device = torch.device(cfg.device if torch.cuda.is_available() else "cpu")
-    writer = SummaryWriter()
+
+    # ── Logging Setup ────────────────────────────────────────────────────
+    run_log_dir = LOGS_DIR / "baseline1"
+    run_log_dir.mkdir(parents=True, exist_ok=True)
+    run_count = len(list(run_log_dir.glob("*.json"))) + 1
+    run_id = f"run{run_count}"
+
+    writer = SummaryWriter(log_dir=run_log_dir / "tensorboard" / run_id)
+    metrics_history = []
+
+    # Class metadata comes from the labels module, not from the YAML.
+    num_classes = NUM_GROUP_ACTIVITIES
+    class_names = list(GROUP_ACTIVITY_TO_IDX.keys())
 
     # ── Data ─────────────────────────────────────────────────────────────
     tf = build_transforms(cfg)
@@ -88,8 +113,7 @@ def train_test(cfg: DictConfig) -> None:
     )
 
     # ── Model ────────────────────────────────────────────────────────────
-    num_classes = len(cfg.class_names)
-    model = build_model(cfg).to(device)
+    model = Model(num_classes=num_classes).to(device)
     criterion = nn.CrossEntropyLoss()
     optimizer = optim.Adam(model.parameters(), lr=cfg.learning_rate)
     scheduler = build_scheduler(optimizer, cfg)
@@ -119,23 +143,53 @@ def train_test(cfg: DictConfig) -> None:
         print(f"Train -> Loss: {train_loss:.4f}, Acc: {train_acc:.4f}, F1: {train_f1:.4f}")
         print(f"Val   -> Loss: {val_loss:.4f}, Acc: {val_acc:.4f}, F1: {val_f1:.4f}")
 
+        # ── JSON Logging ─────────────────────────────────────────────────
+        epoch_metrics = {
+            "epoch": epoch + 1,
+            "train_loss": train_loss,
+            "train_acc": train_acc,
+            "train_f1": train_f1,
+            "val_loss": val_loss,
+            "val_acc": val_acc,
+            "val_f1": val_f1,
+        }
+        if scheduler:
+            epoch_metrics["learning_rate"] = scheduler.get_last_lr()[0]
+        metrics_history.append(epoch_metrics)
+        
+        log_path = run_log_dir / f"{run_id}.json"
+        with log_path.open("w") as f:
+            json.dump({"epochs": metrics_history}, f, indent=4)
+
         if val_f1 > best_f1:
             best_f1 = val_f1
-            save_model("baseline1", epoch, model, optimizer, val_loss)
+            save_model(f"baseline1_{run_id}.pt", epoch, model, optimizer, val_loss)
             print(f"  ✓ New best model saved (F1: {best_f1:.4f})")
 
     writer.close()
 
     # ── Test Best Model ──────────────────────────────────────────────────
     print("\n--- Testing Best Model ---")
-    best_model = build_model(cfg)
-    best_model, _, _, _, _ = load_model("baseline1", best_model)
+    best_model = Model(num_classes=num_classes)
+    best_model, _, _, _, _ = load_model(f"baseline1_{run_id}.pt", best_model)
     best_model.to(device)
 
     test_loss, test_acc, test_f1, _ = test_one_epoch(
         best_model, test_loader, criterion, device,
     )
     print(f"Final Test -> Loss: {test_loss:.4f}, Acc: {test_acc:.4f}, F1: {test_f1:.4f}")
+
+    # Log test results
+    with (run_log_dir / f"{run_id}.json").open("r+") as f:
+        data = json.load(f)
+        data["test"] = {
+            "test_loss": test_loss,
+            "test_acc": test_acc,
+            "test_f1": test_f1,
+        }
+        f.seek(0)
+        json.dump(data, f, indent=4)
+        f.truncate()
 
 
 if __name__ == "__main__":
