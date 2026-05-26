@@ -1,12 +1,39 @@
-from .path_config import *
+"""configs package — centralizes paths, labels, and data splits."""
+
+from .labels import (
+    GROUP_ACTIVITY_TO_IDX,
+    IDX_TO_GROUP_ACTIVITY,
+    IDX_TO_PERSON_ACTION,
+    NUM_GROUP_ACTIVITIES,
+    NUM_PERSON_ACTIONS,
+    PERSON_ACTION_TO_IDX,
+)
+from .path_config import (
+    DATA_DIR,
+    MAIN_DATASET_DIR,
+    MODEL_SAVE_DIR,
+    PLOTS_DIR,
+    VIDEO_SAMPLE_DIR,
+    VOLLEYBALL_ANNOTATIONS_DIR,
+    VOLLEYBALL_DETECTION_DIR,
+    VOLLEYBALL_TRACKING_DIR,
+)
 
 __all__ = [
-    "VIDEO_SAMPLE1_DIR",
-    "VIDEO_SAMPLE2_DIR",
-    "VIDEO_SAMPLE3_DIR",
-    "VIDEO_SAMPLE4_DIR",
-    "VIDEO_SAMPLE5_DIR",
+    # Paths
+    "DATA_DIR",
+    "MAIN_DATASET_DIR",
+    "MODEL_SAVE_DIR",
+    "PLOTS_DIR",
+    "VIDEO_SAMPLE_DIR",
+    "VOLLEYBALL_ANNOTATIONS_DIR",
     "VOLLEYBALL_DETECTION_DIR",
     "VOLLEYBALL_TRACKING_DIR",
-
+    # Labels
+    "GROUP_ACTIVITY_TO_IDX",
+    "IDX_TO_GROUP_ACTIVITY",
+    "PERSON_ACTION_TO_IDX",
+    "IDX_TO_PERSON_ACTION",
+    "NUM_GROUP_ACTIVITIES",
+    "NUM_PERSON_ACTIONS",
 ]

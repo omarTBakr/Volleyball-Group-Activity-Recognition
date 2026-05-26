@@ -1,77 +1,107 @@
+"""
+Model, transform, and scheduler builders driven by Hydra config.
+
+These factories read from an OmegaConf ``DictConfig`` and return
+fully-initialized PyTorch objects ready for training.
+"""
+
+from __future__ import annotations
+
 from hydra.utils import instantiate
 from omegaconf import DictConfig
 from torch import nn
-from torch.optim.lr_scheduler import CosineAnnealingLR
+from torch.optim import Optimizer
+from torch.optim.lr_scheduler import CosineAnnealingLR, LRScheduler
 from torchvision import models, transforms
 
+# ── Model ────────────────────────────────────────────────────────────────────
 
-def build_model(cfg: DictConfig):
+
+def build_model(cfg: DictConfig) -> nn.Module:
     """
-    Build a model from the config and return it.
-    Fine-tunes a ResNet by replacing the final classification layer.
+    Build a pretrained torchvision model and replace the classification head.
+
+    Reads ``cfg.model.name``, ``cfg.model.pretrained``, and
+    ``cfg.model.num_classes`` (with fallback to ``len(cfg.class_names)``).
+
+    Returns
+    -------
+    nn.Module
+        The fine-tunable model with the correct output dimension.
+
     """
     model_name = cfg.model.name
     pretrained = cfg.model.get("pretrained", True)
 
-    # 1. Load the requested model
+    # Load the requested architecture
     if model_name == "resnet50":
         weights = models.ResNet50_Weights.DEFAULT if pretrained else None
         model = models.resnet50(weights=weights)
     else:
-        # Generic fallback for other models
         model_fn = getattr(models, model_name)
         model = model_fn(weights="DEFAULT" if pretrained else None)
 
-    # 2. Determine the number of classes from your config
-    # Fallback to len(cfg.class_names) in case ${len(class_names)} interpolation fails
+    # Determine class count
     try:
         num_classes = cfg.model.num_classes
     except Exception:
         num_classes = len(cfg.class_names)
 
-    # 3. Replace the final fully connected layer
+    # Replace the final fully-connected layer
     if hasattr(model, "fc"):
-        in_features = model.fc.in_features
-        model.fc = nn.Linear(in_features, num_classes)
+        model.fc = nn.Linear(model.fc.in_features, num_classes)
     elif hasattr(model, "classifier") and isinstance(model.classifier, nn.Linear):
-        in_features = model.classifier.in_features
-        model.classifier = nn.Linear(in_features, num_classes)
+        model.classifier = nn.Linear(model.classifier.in_features, num_classes)
 
     return model
 
-def build_transforms(cfg: DictConfig):
+
+# ── Transforms ───────────────────────────────────────────────────────────────
+
+
+def build_transforms(cfg: DictConfig) -> dict[str, transforms.Compose]:
     """
-    Build train, validation, and test transforms using Hydra's instantiate.
-    Returns a dictionary of composed transform pipelines.
+    Build train / validation / test transform pipelines via Hydra instantiate.
+
+    Returns
+    -------
+    dict[str, transforms.Compose]
+        Keyed by ``"train"``, ``"validation"``, and ``"test"``.
+
     """
-    # 1. hydra.utils.instantiate converts the YAML list into a Python list
-    #    of instantiated PyTorch transform objects (e.g., [Resize(...), ToTensor(), ...])
     train_list = instantiate(cfg.transforms.train)
     val_list = instantiate(cfg.transforms.validation)
     test_list = instantiate(cfg.transforms.test)
 
-    # 2. Wrap the lists in transforms.Compose
-    transform_pipelines = {
+    return {
         "train": transforms.Compose(train_list),
         "validation": transforms.Compose(val_list),
         "test": transforms.Compose(test_list),
     }
 
-    return transform_pipelines
 
-def build_scheduler(optimizer, cfg: DictConfig):
+# ── Scheduler ────────────────────────────────────────────────────────────────
+
+
+def build_scheduler(optimizer: Optimizer, cfg: DictConfig) -> LRScheduler:
     """
-    Build scheduler from the config and return it.
+    Build a learning-rate scheduler from the config.
+
+    Currently supports ``CosineAnnealingLR``.
+
+    Raises
+    ------
+    ValueError
+        If the scheduler name is not recognized.
+
     """
-    # Access the scheduler configuration block
     sched_cfg = cfg.lr_scheduler
 
     if sched_cfg.name == "CosineAnnealingLR":
-        scheduler = CosineAnnealingLR(
+        return CosineAnnealingLR(
             optimizer,
-            T_max=sched_cfg.T_max,   # Interpolated automatically by Hydra to 100
+            T_max=sched_cfg.T_max,
             eta_min=sched_cfg.eta_min,
         )
-        return scheduler
-    raise ValueError(f"Unsupported scheduler name: {sched_cfg.name}")
 
+    raise ValueError(f"Unsupported scheduler name: {sched_cfg.name}")

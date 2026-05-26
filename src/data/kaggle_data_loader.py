@@ -18,14 +18,15 @@ Everything else (constructor args, return shapes, collate_fn) is identical.
 
 from __future__ import annotations
 
+from collections.abc import Callable, Sequence
 from pathlib import Path
-from typing import Callable, Sequence, Any
+from typing import Any
 
-import torch
+import torch  # ty:ignore[unresolved-import]
 from PIL import Image
-from torch.utils.data import DataLoader, Dataset
-from torchvision import transforms
-from torchvision.transforms import ToTensor
+from torch.utils.data import DataLoader, Dataset  # ty:ignore[unresolved-import]
+from torchvision import transforms  # ty:ignore[unresolved-import]
+from torchvision.transforms import ToTensor  # ty:ignore[unresolved-import]
 
 from configs.data_split import (
     TEST_VIDEOS_NUMBERS,
@@ -140,12 +141,12 @@ class VolleyballDataset(Dataset):
         self.full_image = full_image
         self.crop = crop
         self.transform = transform
-        
+
         # Verify Dataset Directory
         self.dataset_dir = Path(dataset_dir) if dataset_dir else MAIN_DATASET_DIR
         if not self.dataset_dir.exists() or not self.dataset_dir.is_dir():
             raise FileNotFoundError(
-                f"Dataset directory not found or not a directory: {self.dataset_dir}"
+                f"Dataset directory not found or not a directory: {self.dataset_dir}",
             )
 
         # Load annotation data
@@ -185,7 +186,7 @@ class VolleyballDataset(Dataset):
             search_offsets = [0]
             for i in range(1, len(all_frames)):
                 search_offsets.extend([i, -i])
-                
+
             for offset in search_offsets:
                 idx = best_idx + offset
                 if 0 <= idx < len(all_frames):
@@ -222,7 +223,7 @@ class VolleyballDataset(Dataset):
         half = self.n_frames // 2
         start = max(0, mid_idx - half)
         end = min(len(all_frames), mid_idx + half + 1)
-        
+
         selected = all_frames[start:end]
         selected = self._pad_frame_sequence(selected, all_frames, start, end)
 
@@ -233,10 +234,10 @@ class VolleyballDataset(Dataset):
     def _load_image(self, video_id: str, clip_id: str, frame_name: str) -> Image.Image:
         """Load an individual frame directly from disk."""
         path = self.dataset_dir / video_id / clip_id / frame_name
-        
+
         if not path.is_file():
             raise FileNotFoundError(f"Frame image not found: {path}")
-            
+
         try:
             return Image.open(path).convert("RGB")
         except Exception as e:
@@ -251,7 +252,7 @@ class VolleyballDataset(Dataset):
         persons = tracking.get(frame_name, [])
         if persons:
             return persons
-            
+
         actions = clip_data.get("actions", {})
         return actions.get(frame_name, [])
 
@@ -306,7 +307,7 @@ class VolleyballDataset(Dataset):
 
         if self.full_image:
             return self._getitem_full_image(video_id, clip_id, frame_names, group_label)
-            
+
         return self._getitem_crop(video_id, clip_id, frame_names, clip_data, group_label)
 
     def _getitem_full_image(
@@ -319,7 +320,7 @@ class VolleyballDataset(Dataset):
         if not frame_names:
             raise RuntimeError(
                 f"No frames found for video={video_id} clip={clip_id}. "
-                "Check that MAIN_DATASET_DIR points to a valid dataset."
+                "Check that MAIN_DATASET_DIR points to a valid dataset.",
             )
 
         images = []
@@ -403,7 +404,7 @@ def _pad_and_stack_crops(crops_list: Sequence[torch.Tensor], person_labels_list:
 
     batch_size = len(crops_list)
     sample_shape = next(c for c in crops_list if c.numel() > 0).shape
-    
+
     if len(sample_shape) == 4:
         # Single-frame crops (P, C, H, W)
         _, C, H, W = sample_shape
@@ -437,7 +438,7 @@ def _pad_and_stack_crops(crops_list: Sequence[torch.Tensor], person_labels_list:
             masks[i, :n] = True
     else:
         raise ValueError(f"Unexpected crop dimension format: {sample_shape}")
-        
+
     return padded_crops, padded_labels, masks
 
 
@@ -455,26 +456,26 @@ def collate_fn(batch: list[tuple[Any, ...]]) -> tuple[torch.Tensor, ...]:
     if len(batch[0]) == 2:
         images, labels = zip(*batch)
         shapes = [img.shape for img in images]
-        
+
         # Consistent Temporal size across batch
         if all(s == shapes[0] for s in shapes):
             return torch.stack(images, dim=0), torch.tensor(labels, dtype=torch.long)
-            
+
         # Variable Temporal size (e.g. n_frames > 1 and some frames omitted)
         max_T = max(s[0] for s in shapes)
         _, C, H, W = shapes[0]
         padded_images = torch.zeros(len(images), max_T, C, H, W)
-        
+
         for i, img in enumerate(images):
             t = img.shape[0]
             padded_images[i, :t] = img
-            
+
         return padded_images, torch.tensor(labels, dtype=torch.long)
 
     # Crop Mode Routing
     crops_list, person_labels_list, group_labels = zip(*batch)
     padded_crops, padded_labels, masks = _pad_and_stack_crops(crops_list, person_labels_list)
-    
+
     return (
         padded_crops,
         padded_labels,
@@ -500,7 +501,7 @@ if __name__ == "__main__":
 
     print("── Crop (n_frames=9) ──")
     ds2 = VolleyballDataset(
-        "validation", full_image=False, crop=True, n_frames=9, transform=tf
+        "validation", full_image=False, crop=True, n_frames=9, transform=tf,
     )
     dl2 = DataLoader(ds2, batch_size=4, shuffle=True, collate_fn=collate_fn)
     crops, plabels, glabels, masks = next(iter(dl2))
