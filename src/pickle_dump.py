@@ -54,5 +54,5 @@ def load_from_pickle() -> dict:
 
 if __name__ == "__main__":
     dump_to_pickle()
-    data = load_from_pickle()
-    print("Keys:", list(data.keys()))
+    # data = load_from_pickle()
+    # print("Keys:", list(data.keys()))
