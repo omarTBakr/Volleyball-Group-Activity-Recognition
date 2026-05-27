@@ -35,6 +35,7 @@ from configs.path_config import LOGS_DIR
 from src.data.kaggle_data_loader import VolleyballDataset, collate_fn
 from utils.load_model_config import build_model, build_scheduler, build_transforms
 from utils.utility import (
+    get_device,
     load_model,
     save_model,
     test_one_epoch,
@@ -71,7 +72,7 @@ class Model(nn.Module):
 def train_test(cfg: DictConfig) -> None:
     """Run the full train → validate → test pipeline for Baseline 1."""
     torch.manual_seed(cfg.seed)
-    device = torch.device(cfg.device if torch.cuda.is_available() else "cpu")
+    device = get_device(cfg.device)
 
     # ── Logging Setup ────────────────────────────────────────────────────
     run_log_dir = LOGS_DIR / "baseline1"

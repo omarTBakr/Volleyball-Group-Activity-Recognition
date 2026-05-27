@@ -20,11 +20,11 @@ from utils.plotting import (
     plot_map_f1,
     plot_precision_recall_auc,
 )
-from utils.utility import load_model
+from utils.utility import get_device, load_model
 
 
 def evaluate(model_filename: str, baseline_name: str) -> None:
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    device = get_device()
     
     # ── 1. Setup Data ──
     print("Loading test dataset...")

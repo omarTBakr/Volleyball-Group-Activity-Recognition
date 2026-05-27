@@ -14,7 +14,7 @@ ON_KAGGLE = Path("/kaggle/input").exists()
 
 if ON_KAGGLE:
     KAGGLE_INPUT_DIR  = Path("/kaggle/input/datasets/ahmedmohamed365/volleyball")
-    KAGGLE_OUTPUT_DIR = Path("/kaggle/working")
+    KAGGLE_OUTPUT_DIR = Path("/kaggle/working/Volleyball-Group-Activity-Recognition")
 
     # ── Source data (read-only on Kaggle) ─────────────────────────────────
     DATA_DIR                   = KAGGLE_INPUT_DIR

@@ -17,6 +17,43 @@ from tqdm import tqdm  # ty:ignore[import]
 
 from configs.path_config import MODEL_SAVE_DIR
 
+
+# ── Device Selection ────────────────────────────────────────────────────────
+
+
+def get_device(preferred: str = "cuda") -> torch.device:
+    """
+    Return a verified compute device, falling back to CPU if needed.
+
+    ``torch.cuda.is_available()`` can return ``True`` even when the
+    installed PyTorch build lacks kernel support for the physical GPU
+    (e.g. Tesla P100 with torch ≥ 2.9).  This helper runs a tiny
+    tensor operation on the GPU to confirm it truly works.
+
+    Parameters
+    ----------
+    preferred : str, optional
+        Desired device string (``"cuda"`` or ``"cpu"``).  Defaults to
+        ``"cuda"``.
+
+    Returns
+    -------
+    torch.device
+        A device that is guaranteed to execute tensor operations.
+
+    """
+    if preferred == "cuda" and torch.cuda.is_available():
+        try:
+            # Smoke-test: run a trivial operation on the GPU
+            torch.zeros(1, device="cuda")
+            return torch.device("cuda")
+        except RuntimeError:
+            print(
+                "⚠  CUDA is available but the current GPU is not "
+                "compatible with this PyTorch build. Falling back to CPU."
+            )
+    return torch.device("cpu")
+
 # ── Model Checkpoint I/O ────────────────────────────────────────────────────
 
 

@@ -24,6 +24,7 @@ from torchvision import models
 from src.data.data_loader import VolleyballDataset, collate_fn
 from utils.load_model_config import build_scheduler, build_transforms
 from utils.utility import (
+    get_device,
     load_model,
     save_model,
     test_one_epoch,
@@ -111,7 +112,7 @@ def build_model(cfg: DictConfig, num_classes: int) -> SequenceResNet:
 @hydra.main(config_path="../configs", config_name="baseline3", version_base=None)
 def train_test(cfg: DictConfig) -> None:
     torch.manual_seed(cfg.seed)
-    device = torch.device(cfg.device if torch.cuda.is_available() else "cpu")
+    device = get_device(cfg.device)
     writer = SummaryWriter()
 
     # ── Data ─────────────────────────────────────────────────────────────
