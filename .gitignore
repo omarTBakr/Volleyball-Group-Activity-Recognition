@@ -46,7 +46,7 @@ best_model.pth
 
 # --- Testing & Temporary Images ---
 # If you generate temp images during inference
-*.jpg
-*.jpeg
-*.png
-!image.jpeg  # Keep your specific test image if you want it tracked
+#*.jpg
+#*.jpeg
+#*.png
+#!image.jpeg  # Keep your specific test image if you want it tracked
