@@ -8,8 +8,9 @@ defaults:
 
 # --- Data and DataLoader Configuration ---
 batch_size: 64
-num_workers: 7
-pin_memory: true
+#num_workers: 7  # for local traning 
+num_workers: 4 # for kaggle
+pin_memory: false
 
 # --- Training Configuration ---
 num_epochs: 100
