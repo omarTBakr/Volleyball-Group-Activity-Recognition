@@ -25,10 +25,12 @@ if ON_KAGGLE:
     VOLLEYBALL_TRACKING_DIR    = KAGGLE_INPUT_DIR / "volleyball_tracking_annotation" / "volleyball_tracking_annotation"
     VOLLEYBALL_ANNOTATIONS_DIR = MAIN_DATASET_DIR
 
-    # ── Generated / cached files → writable working dir ──────────────────
+    # ── Generated / cached data → writable working dir ─────────────────
     _GEN_DIR       = KAGGLE_OUTPUT_DIR
-    MODEL_SAVE_DIR = KAGGLE_OUTPUT_DIR / "saved_models"
-    LOGS_DIR       = KAGGLE_OUTPUT_DIR / "logs"
+
+    # ── Output dirs live inside the cloned repo (BASE_DIR) ───────────
+    MODEL_SAVE_DIR = BASE_DIR / "saved_models"
+    LOGS_DIR       = BASE_DIR / "logs"
 
 else:
     # ── Local paths ──────────────────────────────────────────────────────
