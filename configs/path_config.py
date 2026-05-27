@@ -60,6 +60,7 @@ PLOTS_DIR.mkdir(parents=True, exist_ok=True)
 LOGS_DIR.mkdir(parents=True, exist_ok=True)
 if ON_KAGGLE:
     KAGGLE_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    _GEN_DIR.mkdir(parents=True, exist_ok=True)
 
 
 # ── Validation helper ────────────────────────────────────────────────────────
