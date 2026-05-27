@@ -118,31 +118,107 @@ def train_test(cfg: DictConfig) -> None:
     model = Model(num_classes=num_classes).to(device)
     criterion = nn.CrossEntropyLoss(label_smoothing=cfg.get("label_smoothing", 0.0))
 
-    # Differential LR: the pretrained backbone gets the base LR while
-    # the randomly-initialised classifier head gets head_lr_multiplier× higher.
+    best_f1 = 0.0
+    patience = cfg.get("early_stopping_patience", 0)
+    epochs_without_improvement = 0
+    global_epoch = 0
+
+    # ═════════════════════════════════════════════════════════════════════
+    # Stage 1: Linear probe — freeze backbone, train head only
+    # ═════════════════════════════════════════════════════════════════════
+    warmup_epochs = cfg.get("warmup_epochs", 5)
+    warmup_lr = cfg.get("warmup_lr", 1e-3)
+    print(f"\n{'='*60}")
+    print(f"  STAGE 1: Linear Probe ({warmup_epochs} epochs, lr={warmup_lr})")
+    print(f"{'='*60}")
+
+    # Freeze entire backbone
+    for param in model.backbone.parameters():
+        param.requires_grad = False
+    for param in model.backbone.fc.parameters():
+        param.requires_grad = True
+
+    optimizer_s1 = optim.AdamW(
+        model.backbone.fc.parameters(),
+        lr=warmup_lr,
+        weight_decay=cfg.get("weight_decay", 0.05),
+    )
+
+    for epoch in range(warmup_epochs):
+        global_epoch += 1
+        print(f"\n--- Stage 1 · Epoch {epoch + 1}/{warmup_epochs} ---")
+
+        train_loss, train_acc, train_f1, _ = train_one_epoch(
+            model, train_loader, criterion, optimizer_s1, device,
+        )
+        val_loss, val_acc, val_f1, _ = validate_one_epoch(
+            model, val_loader, criterion, device,
+        )
+
+        writer.add_scalar("Loss/train", train_loss, global_epoch)
+        writer.add_scalar("Loss/val", val_loss, global_epoch)
+        writer.add_scalar("F1_Score/train", train_f1, global_epoch)
+        writer.add_scalar("F1_Score/val", val_f1, global_epoch)
+
+        print(f"Train -> Loss: {train_loss:.4f}, Acc: {train_acc:.4f}, F1: {train_f1:.4f}")
+        print(f"Val   -> Loss: {val_loss:.4f}, Acc: {val_acc:.4f}, F1: {val_f1:.4f}")
+
+        epoch_metrics = {
+            "epoch": global_epoch,
+            "stage": 1,
+            "train_loss": train_loss,
+            "train_acc": train_acc,
+            "train_f1": train_f1,
+            "val_loss": val_loss,
+            "val_acc": val_acc,
+            "val_f1": val_f1,
+            "learning_rate": warmup_lr,
+        }
+        metrics_history.append(epoch_metrics)
+
+        log_path = run_log_dir / f"{run_id}.json"
+        with log_path.open("w") as f:
+            json.dump({"epochs": metrics_history}, f, indent=4)
+
+        if val_f1 > best_f1:
+            best_f1 = val_f1
+            save_model(f"baseline1_{run_id}.pt", global_epoch, model, optimizer_s1, val_loss)
+            print(f"  ✓ New best model saved (F1: {best_f1:.4f})")
+
+    # ═════════════════════════════════════════════════════════════════════
+    # Stage 2: Full fine-tune — unfreeze backbone, differential LR
+    # ═════════════════════════════════════════════════════════════════════
+    finetune_epochs = cfg.num_epochs
+    head_mult = cfg.get("head_lr_multiplier", 3)
+    print(f"\n{'='*60}")
+    print(f"  STAGE 2: Full Fine-tune ({finetune_epochs} epochs)")
+    print(f"  Backbone lr={cfg.learning_rate}, Head lr={cfg.learning_rate * head_mult}")
+    print(f"{'='*60}")
+
+    # Unfreeze all parameters
+    for param in model.backbone.parameters():
+        param.requires_grad = True
+
     backbone_params = [p for n, p in model.named_parameters() if "fc" not in n]
     head_params = list(model.backbone.fc.parameters())
-    head_mult = cfg.get("head_lr_multiplier", 5)
 
-    optimizer = optim.AdamW(
+    optimizer_s2 = optim.AdamW(
         [
             {"params": backbone_params, "lr": cfg.learning_rate},
             {"params": head_params, "lr": cfg.learning_rate * head_mult},
         ],
-        weight_decay=cfg.get("weight_decay", 1e-4),
+        weight_decay=cfg.get("weight_decay", 0.05),
     )
-    scheduler = build_scheduler(optimizer, cfg)
+    scheduler = build_scheduler(optimizer_s2, cfg)
 
-    best_f1 = 0.0
-    patience = cfg.get("early_stopping_patience", 0)
-    epochs_without_improvement = 0
+    epochs_without_improvement = 0  # reset for stage 2
 
-    # ── Training Loop ────────────────────────────────────────────────────
-    for epoch in range(cfg.num_epochs):
-        print(f"\n--- Epoch {epoch + 1}/{cfg.num_epochs} ---")
+    for epoch in range(finetune_epochs):
+        global_epoch += 1
+        print(f"\n--- Stage 2 · Epoch {epoch + 1}/{finetune_epochs} ---")
 
         train_loss, train_acc, train_f1, _ = train_one_epoch(
-            model, train_loader, criterion, optimizer, device,
+            model, train_loader, criterion, optimizer_s2, device,
         )
         val_loss, val_acc, val_f1, _ = validate_one_epoch(
             model, val_loader, criterion, device,
@@ -150,19 +226,20 @@ def train_test(cfg: DictConfig) -> None:
 
         if scheduler:
             scheduler.step()
-            writer.add_scalar("Learning_Rate", scheduler.get_last_lr()[0], epoch)
+            writer.add_scalar("Learning_Rate", scheduler.get_last_lr()[0], global_epoch)
 
-        writer.add_scalar("Loss/train", train_loss, epoch)
-        writer.add_scalar("Loss/val", val_loss, epoch)
-        writer.add_scalar("F1_Score/train", train_f1, epoch)
-        writer.add_scalar("F1_Score/val", val_f1, epoch)
+        writer.add_scalar("Loss/train", train_loss, global_epoch)
+        writer.add_scalar("Loss/val", val_loss, global_epoch)
+        writer.add_scalar("F1_Score/train", train_f1, global_epoch)
+        writer.add_scalar("F1_Score/val", val_f1, global_epoch)
 
         print(f"Train -> Loss: {train_loss:.4f}, Acc: {train_acc:.4f}, F1: {train_f1:.4f}")
         print(f"Val   -> Loss: {val_loss:.4f}, Acc: {val_acc:.4f}, F1: {val_f1:.4f}")
 
         # ── JSON Logging ─────────────────────────────────────────────────
         epoch_metrics = {
-            "epoch": epoch + 1,
+            "epoch": global_epoch,
+            "stage": 2,
             "train_loss": train_loss,
             "train_acc": train_acc,
             "train_f1": train_f1,
@@ -173,7 +250,7 @@ def train_test(cfg: DictConfig) -> None:
         if scheduler:
             epoch_metrics["learning_rate"] = scheduler.get_last_lr()[0]
         metrics_history.append(epoch_metrics)
-        
+
         log_path = run_log_dir / f"{run_id}.json"
         with log_path.open("w") as f:
             json.dump({"epochs": metrics_history}, f, indent=4)
@@ -181,7 +258,7 @@ def train_test(cfg: DictConfig) -> None:
         if val_f1 > best_f1:
             best_f1 = val_f1
             epochs_without_improvement = 0
-            save_model(f"baseline1_{run_id}.pt", epoch, model, optimizer, val_loss)
+            save_model(f"baseline1_{run_id}.pt", global_epoch, model, optimizer_s2, val_loss)
             print(f"  ✓ New best model saved (F1: {best_f1:.4f})")
         else:
             epochs_without_improvement += 1
@@ -217,3 +294,4 @@ def train_test(cfg: DictConfig) -> None:
 
 if __name__ == "__main__":
     train_test()
+
