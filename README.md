@@ -2,7 +2,7 @@
 
 A deep learning pipeline for **group activity recognition** in volleyball videos, based on the [CVPR 2016 paper](https://www.cs.sfu.ca/~mori/research/papers/ibrahim-cvpr16.pdf) by Mostafa S. Ibrahim et al.
 
-The project implements a hierarchical data pipeline and a generic PyTorch data loader that supports **8 progressively complex baseline models** (B1–B8).
+The project implements a hierarchical data pipeline and a generic PyTorch data loader that supports **8 progressively complex baseline models** (B1–B8). **Baseline 1 is complete.**
 
 ---
 
@@ -14,6 +14,7 @@ The project implements a hierarchical data pipeline and a generic PyTorch data l
 - [Annotation Levels](#annotation-levels)
 - [Data Loader](#data-loader)
 - [Baseline Models](#baseline-models)
+- [Results](#results)
 - [Project Structure](#project-structure)
 - [Setup & Usage](#setup--usage)
 
@@ -218,28 +219,57 @@ loader = DataLoader(dataset, batch_size=8, collate_fn=collate_fn)
 
 ## Baseline Models
 
-```mermaid
-graph TD
-    B1["B1: Image Classifier<br>ResNet50 on middle frame<br>→ 8 group classes"]
-    B3["B3: Person Classifier<br>ResNet50 on crops → features<br>Max-pool → 8 group classes"]
-    B4["B4: Temporal Image<br>LSTM on 9-frame features<br>→ 8 group classes"]
-    B5["B5: Temporal Crops<br>LSTM per player → pool<br>→ 8 group classes"]
-    B6["B6: Image-Level LSTM<br>Pool crops per frame<br>→ LSTM → 8 group classes"]
-    B7["B7: Full Hierarchical<br>LSTM₁ per player + LSTM₂ on frames"]
-    B8["B8: Team-Split<br>B7 + separate team pooling"]
+| Baseline | Status | Input | Temporal | Player-Level | Scene-Level |
+|----------|--------|-------|----------|--------------|-------------|
+| **B1** | ✅ Done | Middle frame (full) | ✗ | ✗ | Image classifier (8 classes) |
+| **B3** | 🔲 Pending | Middle frame (crops) | ✗ | Crop classifier (9 classes) | Max-pool features → NN (8 classes) |
+| **B4** | 🔲 Pending | 9 frames (full) | LSTM on frame features | ✗ | LSTM → 8 classes |
+| **B5** | 🔲 Pending | 9 frames (crops) | LSTM per player | Max-pool players | NN (8 classes) |
+| **B6** | 🔲 Pending | 9 frames (crops) | LSTM on pooled frames | Max-pool per frame | LSTM → 8 classes |
+| **B7** | 🔲 Pending | 9 frames (crops) | LSTM₁ per player + LSTM₂ | Max-pool per frame | LSTM₂ → 8 classes |
+| **B8** | 🔲 Pending | 9 frames (crops) | LSTM₁ per player + LSTM₂ | Team-split pool (6+6) | Concat teams → LSTM₂ |
 
-    B1 --> B3 --> B4 --> B5 --> B6 --> B7 --> B8
-```
+---
 
-| Baseline | Input | Temporal | Player-Level | Scene-Level |
-|----------|-------|----------|--------------|-------------|
-| **B1** | Middle frame (full) | ✗ | ✗ | Image classifier (8 classes) |
-| **B3** | Middle frame (crops) | ✗ | Crop classifier (9 classes) | Max-pool features → NN (8 classes) |
-| **B4** | 9 frames (full) | LSTM on frame features | ✗ | LSTM → 8 classes |
-| **B5** | 9 frames (crops) | LSTM per player | Max-pool players | NN (8 classes) |
-| **B6** | 9 frames (crops) | LSTM on pooled frames | Max-pool per frame | LSTM → 8 classes |
-| **B7** | 9 frames (crops) | LSTM₁ per player + LSTM₂ | Max-pool per frame | LSTM₂ → 8 classes |
-| **B8** | 9 frames (crops) | LSTM₁ per player + LSTM₂ | Team-split pool (6+6) | Concat teams → LSTM₂ |
+## Results
+
+### Baseline 1 — Single-Frame Image Classifier
+
+Training uses a two-stage strategy: a linear probe (head-only) followed by full fine-tuning with differential learning rates and cosine annealing.
+
+| Hyperparameter | Value |
+|---|---|
+| Backbone | ResNet-50 (pretrained) |
+| Stage 1 (linear probe) | 5 epochs, lr = 1e-3 |
+| Stage 2 (full fine-tune) | 50 epochs, backbone lr = 1e-4, head lr = 3 × 1e-4 |
+| LR Scheduler | CosineAnnealingLR |
+| Label Smoothing | 0.1 |
+| Weight Decay | 0.05 |
+| Early Stopping Patience | 10 epochs |
+
+#### Test Metrics
+
+| Metric | Value |
+|--------|-------|
+| Accuracy | — |
+| Macro F1 | — |
+| Loss | — |
+
+#### Confusion Matrix
+
+![Confusion Matrix](plots/baseline1/Confusion%20Matrix.png)
+
+#### Classification Report
+
+![Classification Report](plots/baseline1/Classification%20Report.png)
+
+#### Precision-Recall Curves
+
+![Precision-Recall Curves](plots/baseline1/Precision-Recall%20Curves.png)
+
+#### mAP & F1 per Class
+
+![mAP & F1](plots/baseline1/mAP%20%26%20F1%20Score%20per%20Class.png)
 
 ---
 
@@ -260,26 +290,37 @@ Project1/
 ├── src/
 │   ├── json_parser.py           # Two-stage parsing pipeline
 │   ├── pickle_dump.py           # Singleton pickle dump/load
+│   ├── load_frames_into_lmdb.py # Pack frames into LMDB
+│   ├── load_frames_into_pickle.py
 │   └── data/
-│       ├── data_loader.py       # Generic VolleyballDataset + collate_fn
+│       ├── data_loader.py       # Original data loader
+│       ├── kaggle_data_loader.py# Kaggle-compatible data loader
 │       ├── data_summary.py      # Statistics and class distributions
 │       └── visualize_data.py    # Dataset visualization
 │
 ├── models/
-│   ├── baseline1.py             # B1: Fine-tuned ResNet50 classifier
-│   └── baseline3.py             # B3: Sequence ResNet with crop pooling
+│   ├── baseline1.py             # B1: Two-stage fine-tuned ResNet50 (✅ done)
+│   └── baseline3.py             # B3: Crop-based classifier (pending)
 │
 ├── utils/
-│   └── utility.py               # Training/eval helpers
+│   ├── utility.py               # Training/eval loop helpers
+│   ├── evaluate.py              # Post-training evaluation + plots
+│   ├── plotting.py              # Confusion matrix, PR curves, mAP
+│   └── load_model_config.py     # Hydra config → transforms/scheduler builders
 │
 ├── reports/
-│   ├── report.tex               # LaTeX report
-│   └── figures/                 # Distribution plots
+│   └── report.tex               # LaTeX report
 │
 ├── DataSet/                     # Raw data (not tracked in git)
-├── saved_models/                # Model checkpoints
-├── runs/                        # TensorBoard logs
+├── saved_models/                # Model checkpoints (.pt)
+├── runs/                        # TensorBoard + JSON metric logs
 └── plots/                       # Output visualizations
+    ├── baseline1/               # B1 evaluation plots
+    │   ├── Confusion Matrix.png
+    │   ├── Classification Report.png
+    │   ├── Precision-Recall Curves.png
+    │   └── mAP & F1 Score per Class.png
+    └── ...
 ```
 
 ---
@@ -316,9 +357,17 @@ python -m src.data.data_loader
 ### 4. Train a Baseline
 
 ```bash
-python models/baseline1.py   # B1: Image classifier
-python models/baseline3.py   # B3: Crop-based classifier
+python -m models.baseline1   # B1: Two-stage fine-tuned ResNet50
+python -m models.baseline3   # B3: Crop-based classifier (pending)
 ```
+
+### 5. Evaluate a Baseline
+
+```bash
+uv run python -m utils.evaluate --model baseline1_run1.pt --baseline baseline1
+```
+
+This generates all evaluation plots (confusion matrix, classification report, PR curves, mAP) under `plots/baseline1/`.
 
 ---
 

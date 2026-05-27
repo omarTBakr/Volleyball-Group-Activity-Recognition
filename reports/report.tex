@@ -62,8 +62,8 @@
 % ABSTRACT AND KEYWORDS
 %----------------------------------------------------------
 
-\begin{abstract}    
-   This report documents the data pipeline and loader architecture for the Volleyball Group Activity Recognition project. The dataset, introduced in the CVPR 2016 paper by Mostafa S. Ibrahim et al., contains 55 volleyball videos with two annotation levels: 8 scene-level group activities and 9 player-level individual actions. We describe the two-stage parsing pipeline that unifies three raw annotation sources into a single fast-loading pickle cache, and the generic PyTorch data loader that supports all eight baseline models (B1--B8) through configurable constructor flags.
+\begin{abstract}
+   This report documents the data pipeline, loader architecture, and first experimental results for the Volleyball Group Activity Recognition project. The dataset, introduced in the CVPR 2016 paper by Mostafa S. Ibrahim et al., contains 55 volleyball videos with two annotation levels: 8 scene-level group activities and 9 player-level individual actions. We describe the two-stage parsing pipeline that unifies three raw annotation sources into a single fast-loading pickle cache, and the generic PyTorch data loader that supports all eight baseline models (B1--B8). We also present Baseline 1 (B1), a two-stage fine-tuned ResNet-50 single-frame classifier, including its training configuration and test-set evaluation.
 \end{abstract}
 
 %----------------------------------------------------------
@@ -277,6 +277,70 @@ The project implements a progressive series of baseline models, each adding comp
 \end{itemize}
 
 
+\section{Baseline 1: Single-Frame Classifier}
+
+\subsection{Architecture}
+
+Baseline 1 fine-tunes a pretrained ResNet-50 on the middle frame of each clip to directly predict the 8-class group activity label. No temporal or player-level modelling is used; the final fully-connected layer is replaced with a linear head of size 8.
+
+\subsection{Training Strategy}
+
+Training follows a two-stage schedule to stabilise optimisation:
+
+\begin{enumerate}[leftmargin=*]
+    \item \textbf{Linear probe} --- backbone frozen, head trained for 5 epochs at $\text{lr} = 10^{-3}$.
+    \item \textbf{Full fine-tune} --- entire network unfrozen, up to 50 epochs with differential learning rates (backbone $10^{-4}$, head $3 \times 10^{-4}$) and cosine annealing.
+\end{enumerate}
+
+\begin{table}[h]
+    \centering
+    \caption{Baseline 1 hyperparameters}
+    \label{tab:b1-hyperparams}
+    \begin{tabular}{ll}
+        \toprule
+        \textbf{Hyperparameter} & \textbf{Value} \\
+        \midrule
+        Backbone            & ResNet-50 (pretrained) \\
+        Stage 1 epochs      & 5, $\text{lr} = 10^{-3}$ \\
+        Stage 2 max epochs  & 50, $\text{lr}_\text{backbone} = 10^{-4}$ \\
+        Head lr multiplier  & $3\times$ \\
+        LR scheduler        & CosineAnnealingLR \\
+        Label smoothing     & 0.1 \\
+        Weight decay        & 0.05 \\
+        Batch size          & 128 \\
+        Early stopping      & patience = 10 epochs \\
+        \bottomrule
+    \end{tabular}
+\end{table}
+
+\subsection{Test-Set Performance}
+
+\begin{table}[h]
+    \centering
+    \caption{Baseline 1 test-set metrics \textnormal{(\textit{to be updated})}}
+    \label{tab:b1-metrics}
+    \begin{tabular}{lc}
+        \toprule
+        \textbf{Metric} & \textbf{Value} \\
+        \midrule
+        Accuracy   & \textit{TBD} \\
+        Macro F1   & \textit{TBD} \\
+        Test Loss  & \textit{TBD} \\
+        \bottomrule
+    \end{tabular}
+\end{table}
+
+\subsection{Confusion Matrix}
+
+Fig.~\ref{fig:b1-confusion} shows the per-class prediction confusion on the test split. Rows are ground-truth classes; columns are predicted classes.
+
+\begin{figure}[h]
+    \centering
+    \includegraphics[width=0.95\linewidth]{{../plots/baseline1/Confusion Matrix}.png}
+    \caption{Confusion matrix for Baseline 1 on the test split.}
+    \label{fig:b1-confusion}
+\end{figure}
+
 \section{Project Structure}
 
 The codebase is organized as follows:
@@ -285,10 +349,13 @@ The codebase is organized as follows:
     \item \texttt{configs/} --- Centralised configuration: paths, splits, label mappings, and per-baseline Hydra YAML configs.
     \item \texttt{src/json\_parser.py} --- Two-stage parsing pipeline.
     \item \texttt{src/pickle\_dump.py} --- Singleton pickle dump/load utility.
-    \item \texttt{src/data/data\_loader.py} --- Generic PyTorch Dataset and collate function.
+    \item \texttt{src/data/kaggle\_data\_loader.py} --- Generic PyTorch Dataset and collate function.
     \item \texttt{src/data/data\_summary.py} --- Dataset statistics and class distributions.
-    \item \texttt{models/} --- Baseline model implementations (B1, B3, etc.).
-    \item \texttt{utils/utility.py} --- Shared training/evaluation helpers.
+    \item \texttt{models/baseline1.py} --- B1: two-stage fine-tuned ResNet-50 (\textit{complete}).
+    \item \texttt{utils/utility.py} --- Training/evaluation loop helpers.
+    \item \texttt{utils/evaluate.py} --- Post-training evaluation: loads checkpoint, runs inference, generates all metric plots.
+    \item \texttt{utils/plotting.py} --- Confusion matrix, classification report, PR curves, mAP bar chart.
+    \item \texttt{utils/load\_model\_config.py} --- Hydra config builders for transforms and scheduler.
 \end{itemize}
 
 %----------------------------------------------------------
