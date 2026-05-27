@@ -13,14 +13,14 @@ num_workers: 4 # for kaggle
 pin_memory: false
 
 # --- Training Configuration ---
-num_epochs: 100
-learning_rate: 0.0015
+num_epochs: 30
+learning_rate: 0.0001
 
 # --- Learning Rate Scheduler Configuration ---
 lr_scheduler:
   name: CosineAnnealingLR
   T_max: ${num_epochs}
-  eta_min: 1e-5
+  eta_min: 1e-6
 
 # --- Model Configuration ---
 # Class names and num_classes are sourced from configs/labels.py at runtime,

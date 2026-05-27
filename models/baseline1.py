@@ -87,6 +87,7 @@ def train_test(cfg: DictConfig) -> None:
     num_classes = NUM_GROUP_ACTIVITIES
     class_names = list(GROUP_ACTIVITY_TO_IDX.keys())
 
+ 
     # ── Data ─────────────────────────────────────────────────────────────
     tf = build_transforms(cfg)
 

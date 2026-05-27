@@ -1,0 +1,21 @@
+{
+  "id": "omaraymanbakr/volleyball-project-baseline-1",
+  "id_no": 117499401,
+  "title": "volleyball project baseline 1",
+  "code_file": "volleyball-project-baseline-1.ipynb",
+  "language": "python",
+  "kernel_type": "notebook",
+  "is_private": true,
+  "enable_gpu": true,
+  "enable_tpu": false,
+  "enable_internet": true,
+  "keywords": [],
+  "dataset_sources": [
+    "ahmedmohamed365/volleyball"
+  ],
+  "kernel_sources": [
+    "packagemanager/pm-117499401-at-05-27-2026-11-59-00"
+  ],
+  "competition_sources": [],
+  "model_sources": []
+}
