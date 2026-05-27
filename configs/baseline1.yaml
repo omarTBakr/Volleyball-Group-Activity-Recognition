@@ -1,21 +1,21 @@
 # This is the main configuration file for the 'baseline1' experiment.
 
 # In this baseline we fine-tune ResNet-50 on the middle frame of each clip.
-# The backbone is frozen; only the classifier head is trained.
+# Full fine-tuning with differential LR (backbone=base, head=10×).
 
 defaults:
   - _self_
   - transforms: default_transforms.yaml
 
 # --- Data and DataLoader Configuration ---
-batch_size: 128
+batch_size: 64
 #num_workers: 7  # for local training
 num_workers: 4 # for kaggle
 pin_memory: false
 
 # --- Training Configuration ---
-num_epochs: 30
-learning_rate: 1e-3
+num_epochs: 100
+learning_rate: 1e-4
 
 # --- Learning Rate Scheduler Configuration ---
 lr_scheduler:

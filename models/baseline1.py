@@ -118,16 +118,16 @@ def train_test(cfg: DictConfig) -> None:
     model = Model(num_classes=num_classes).to(device)
     criterion = nn.CrossEntropyLoss()
 
-    # Freeze the entire pretrained backbone — only the classifier head trains.
-    for param in model.backbone.parameters():
-        param.requires_grad = False
-    # Unfreeze the FC head (it was replaced with a random linear layer).
-    for param in model.backbone.fc.parameters():
-        param.requires_grad = True
+    # Differential LR: the pretrained backbone gets the base LR while
+    # the randomly-initialised classifier head gets 10× higher.
+    backbone_params = [p for n, p in model.named_parameters() if "fc" not in n]
+    head_params = list(model.backbone.fc.parameters())
 
     optimizer = optim.AdamW(
-        model.backbone.fc.parameters(),
-        lr=cfg.learning_rate,
+        [
+            {"params": backbone_params, "lr": cfg.learning_rate},
+            {"params": head_params, "lr": cfg.learning_rate * 10},
+        ],
         weight_decay=1e-4,
     )
     scheduler = build_scheduler(optimizer, cfg)
