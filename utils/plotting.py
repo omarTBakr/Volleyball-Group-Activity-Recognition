@@ -30,6 +30,7 @@ plot_map_f1
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 import matplotlib.pyplot as plt  # ty:ignore[unresolved-import]
 import numpy as np
@@ -590,7 +591,7 @@ def plot_map_f1(
         y_true_bin[idx, label] = 1
 
     # ── Per-class metrics ──
-    report = classification_report(
+    report: Any = classification_report(
         y_true, y_pred,
         target_names=class_names,
         output_dict=True,

@@ -155,8 +155,8 @@ def train_one_epoch(
         y_pred.extend(output.argmax(dim=1).cpu().numpy())
 
     loss_epoch = running_loss / len(dataloader)
-    acc_epoch = accuracy_score(y_true, y_pred)
-    f1_epoch = f1_score(y_true, y_pred, average="macro")
+    acc_epoch = float(accuracy_score(y_true, y_pred))
+    f1_epoch = float(f1_score(y_true, y_pred, average="macro"))
     conf_mat = confusion_matrix(y_true, y_pred)
 
     return loss_epoch, acc_epoch, f1_epoch, conf_mat
@@ -215,8 +215,8 @@ def validate_one_epoch(
         y_pred.extend(output.argmax(dim=1).cpu().numpy())
 
     loss_epoch = running_loss / len(dataloader)
-    acc_epoch = accuracy_score(y_true, y_pred)
-    f1_epoch = f1_score(y_true, y_pred, average="macro")
+    acc_epoch = float(accuracy_score(y_true, y_pred))
+    f1_epoch = float(f1_score(y_true, y_pred, average="macro"))
     conf_mat = confusion_matrix(y_true, y_pred)
 
     return loss_epoch, acc_epoch, f1_epoch, conf_mat
@@ -275,8 +275,8 @@ def test_one_epoch(
         y_pred.extend(output.argmax(dim=1).cpu().numpy())
 
     loss_epoch = running_loss / len(dataloader)
-    acc_epoch = accuracy_score(y_true, y_pred)
-    f1_epoch = f1_score(y_true, y_pred, average="macro")
+    acc_epoch = float(accuracy_score(y_true, y_pred))
+    f1_epoch = float(f1_score(y_true, y_pred, average="macro"))
     conf_mat = confusion_matrix(y_true, y_pred)
 
     return loss_epoch, acc_epoch, f1_epoch, conf_mat
