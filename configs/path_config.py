@@ -26,7 +26,7 @@ if ON_KAGGLE:
     VOLLEYBALL_ANNOTATIONS_DIR = MAIN_DATASET_DIR
 
     # ── Generated / cached data → writable working dir ─────────────────
-    _GEN_DIR       = KAGGLE_OUTPUT_DIR
+    _GEN_DIR       = KAGGLE_OUTPUT_DIR / "DataSet"
 
     # ── Output dirs live inside the cloned repo (BASE_DIR) ───────────
     MODEL_SAVE_DIR = BASE_DIR / "saved_models"
