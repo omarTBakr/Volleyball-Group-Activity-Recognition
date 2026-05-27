@@ -117,7 +117,7 @@ def train_test(cfg: DictConfig) -> None:
     # ── Model ────────────────────────────────────────────────────────────
     model = Model(num_classes=num_classes).to(device)
     criterion = nn.CrossEntropyLoss()
-    optimizer = optim.Adam(model.parameters(), lr=cfg.learning_rate)
+    optimizer = optim.AdamW(model.parameters(), lr=cfg.learning_rate)
     scheduler = build_scheduler(optimizer, cfg)
 
     best_f1 = 0.0
