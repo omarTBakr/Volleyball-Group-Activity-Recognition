@@ -8,14 +8,14 @@ defaults:
   - transforms: default_transforms.yaml
 
 # --- Data and DataLoader Configuration ---
-batch_size: 64
+batch_size: 256
 #num_workers: 7  # for local training
 num_workers: 4 # for kaggle
 pin_memory: false
 
 # --- Training Configuration ---
 num_epochs: 100
-learning_rate: 1e-4
+learning_rate: 1e-3
 
 # --- Learning Rate Scheduler Configuration ---
 lr_scheduler:
