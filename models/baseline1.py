@@ -116,23 +116,26 @@ def train_test(cfg: DictConfig) -> None:
 
     # ── Model ────────────────────────────────────────────────────────────
     model = Model(num_classes=num_classes).to(device)
-    criterion = nn.CrossEntropyLoss()
+    criterion = nn.CrossEntropyLoss(label_smoothing=cfg.get("label_smoothing", 0.0))
 
     # Differential LR: the pretrained backbone gets the base LR while
-    # the randomly-initialised classifier head gets 10× higher.
+    # the randomly-initialised classifier head gets head_lr_multiplier× higher.
     backbone_params = [p for n, p in model.named_parameters() if "fc" not in n]
     head_params = list(model.backbone.fc.parameters())
+    head_mult = cfg.get("head_lr_multiplier", 5)
 
     optimizer = optim.AdamW(
         [
             {"params": backbone_params, "lr": cfg.learning_rate},
-            {"params": head_params, "lr": cfg.learning_rate * 10},
+            {"params": head_params, "lr": cfg.learning_rate * head_mult},
         ],
-        weight_decay=1e-4,
+        weight_decay=cfg.get("weight_decay", 1e-4),
     )
     scheduler = build_scheduler(optimizer, cfg)
 
     best_f1 = 0.0
+    patience = cfg.get("early_stopping_patience", 0)
+    epochs_without_improvement = 0
 
     # ── Training Loop ────────────────────────────────────────────────────
     for epoch in range(cfg.num_epochs):
@@ -177,8 +180,14 @@ def train_test(cfg: DictConfig) -> None:
 
         if val_f1 > best_f1:
             best_f1 = val_f1
+            epochs_without_improvement = 0
             save_model(f"baseline1_{run_id}.pt", epoch, model, optimizer, val_loss)
             print(f"  ✓ New best model saved (F1: {best_f1:.4f})")
+        else:
+            epochs_without_improvement += 1
+            if patience > 0 and epochs_without_improvement >= patience:
+                print(f"  ⏹ Early stopping — no improvement for {patience} epochs.")
+                break
 
     writer.close()
 
