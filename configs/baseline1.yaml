@@ -20,7 +20,7 @@ learning_rate: 1e-4
 lr_scheduler:
   name: CosineAnnealingLR
   T_max: ${num_epochs}
-  eta_min: 1e-6
+  eta_min: 1e-5
 
 model:
   name: "resnet50"

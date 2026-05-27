@@ -117,7 +117,19 @@ def train_test(cfg: DictConfig) -> None:
     # ── Model ────────────────────────────────────────────────────────────
     model = Model(num_classes=num_classes).to(device)
     criterion = nn.CrossEntropyLoss()
-    optimizer = optim.AdamW(model.parameters(), lr=cfg.learning_rate)
+
+    # Differential LR: the pretrained backbone gets the base LR while
+    # the randomly-initialised classifier head gets 10× higher.
+    backbone_params = [p for n, p in model.named_parameters() if "fc" not in n]
+    head_params = list(model.backbone.fc.parameters())
+
+    optimizer = optim.AdamW(
+        [
+            {"params": backbone_params, "lr": cfg.learning_rate},
+            {"params": head_params, "lr": cfg.learning_rate * 10},
+        ],
+        weight_decay=1e-4,
+    )
     scheduler = build_scheduler(optimizer, cfg)
 
     best_f1 = 0.0
