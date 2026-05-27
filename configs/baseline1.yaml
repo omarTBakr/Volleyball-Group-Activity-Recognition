@@ -7,7 +7,7 @@ defaults:
   - transforms: default_transforms.yaml
 
 # --- Data and DataLoader Configuration ---
-batch_size: 64
+batch_size: 128
 #num_workers: 7  # for local traning 
 num_workers: 4 # for kaggle
 pin_memory: false
@@ -22,9 +22,7 @@ lr_scheduler:
   T_max: ${num_epochs}
   eta_min: 1e-6
 
-# --- Model Configuration ---
-# Class names and num_classes are sourced from configs/labels.py at runtime,
-# keeping this YAML as the single source for hyper-parameters only.
+
 model:
   name: "resnet50"
   pretrained: true
