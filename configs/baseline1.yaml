@@ -20,7 +20,7 @@ head_lr_multiplier: 5         # ⬇️ from 10
 label_smoothing: 0.1          # ⬆️ new
 early_stopping_patience: 5    # ⬆️ new
 
-label_smoothing: 0.1          # ⬆️ new
+ 
  
 
 
