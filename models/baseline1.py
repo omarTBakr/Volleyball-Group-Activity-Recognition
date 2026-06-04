@@ -51,12 +51,16 @@ from utils.utility import (
 class Model(nn.Module):
     """Simple ResNet-50 wrapper for single-frame classification."""
 
-    def __init__(self, num_classes: int = NUM_GROUP_ACTIVITIES) -> None:
+    def __init__(self, num_classes: int = NUM_GROUP_ACTIVITIES, backbone_name: str = "resnet101") -> None:
         super().__init__()
 
         self.num_classes = num_classes
-        # self.backbone = models.resnet50(weights=models.ResNet50_Weights.DEFAULT)
-        self.backbone = models.resnet101(weights=models.ResNet101_Weights.DEFAULT)
+        
+        if backbone_name == "resnet50":
+            self.backbone = models.resnet50(weights=models.ResNet50_Weights.DEFAULT)
+        elif backbone_name == "resnet101":
+            self.backbone = models.resnet101(weights=models.ResNet101_Weights.DEFAULT)
+        
         self.backbone.fc = nn.Linear(self.backbone.fc.in_features, num_classes)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -116,7 +120,7 @@ def train_test(cfg: DictConfig) -> None:
     )
 
     # ── Model ────────────────────────────────────────────────────────────
-    model = Model(num_classes=num_classes).to(device)
+    model = Model(num_classes=num_classes, backbone_name=cfg.model.name).to(device)
     criterion = nn.CrossEntropyLoss(label_smoothing=cfg.get("label_smoothing", 0.0))
 
     best_f1 = 0.0

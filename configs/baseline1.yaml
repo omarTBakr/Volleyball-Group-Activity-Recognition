@@ -12,7 +12,7 @@ warmup_lr: 1e-3
 
 # --- Stage 2: Full fine-tune (differential LR) ---
 num_epochs: 50
-learning_rate: 1e-3 # increasing the learning rate for the SGD optimizer
+learning_rate: 1e-4 # increasing the learning rate for the SGD optimizer
 weight_decay: 0.05
 head_lr_multiplier: 2
 
