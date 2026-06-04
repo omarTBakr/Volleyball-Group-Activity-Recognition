@@ -14,8 +14,8 @@ train:
     size: [224, 224]
     scale: [0.7, 1.0]
     
-  - _target_: torchvision.transforms.RandomHorizontalFlip
-    p: 0.5
+  # - _target_: torchvision.transforms.RandomHorizontalFlip # too server for the model 
+  #   p: 0.5
     
   - _target_: torchvision.transforms.ColorJitter
     brightness: 0.3
@@ -31,7 +31,7 @@ train:
     mean: [0.485, 0.456, 0.406]
     std:  [0.229, 0.224, 0.225]
     
-  - _target_: torchvision.transforms.RandomErasing       # 🔥 cuts overfitting
+  - _target_: torchvision.transforms.RandomErasing       # 🔥 cuts overfitting 
     p: 0.25
 
 validation:

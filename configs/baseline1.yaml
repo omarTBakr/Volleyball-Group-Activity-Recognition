@@ -14,18 +14,20 @@ warmup_lr: 1e-4
 num_epochs: 100
 learning_rate: 1e-5
 weight_decay: 0.01
-head_lr_multiplier: 3
+head_lr_multiplier: 2
 
-# lr_scheduler:
-#   name: CosineAnnealingLR
-#   T_max: ${num_epochs}
-#   eta_min: 1e-6
+lr_scheduler:
+  name: CosineAnnealingLR
+  T_max: ${num_epochs}
+  eta_min: 1e-6
 
 label_smoothing: 0.1
-early_stopping_patience: 25
+early_stopping_patience: 20
 
 model:
-  name: "resnet50"
+  # name: "resnet50" # underfits the data 
+  
+  name: "resnet101"
   pretrained: true
   weights: "DEFAULT"
 
