@@ -141,7 +141,7 @@ def train_test(cfg: DictConfig) -> None:
     optimizer_s1 = optim.AdamW(
         model.backbone.fc.parameters(),
         lr=warmup_lr,
-        weight_decay=cfg.get("weight_decay", 0.05),
+        weight_decay=cfg.get("weight_decay", 0.01),
     )
 
     for epoch in range(warmup_epochs):

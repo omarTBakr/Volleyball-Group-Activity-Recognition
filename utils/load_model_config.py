@@ -83,7 +83,7 @@ def build_transforms(cfg: DictConfig) -> dict[str, transforms.Compose]:
 # ── Scheduler ────────────────────────────────────────────────────────────────
 
 
-def build_scheduler(optimizer: Optimizer, cfg: DictConfig) -> LRScheduler:
+def build_scheduler(optimizer: Optimizer, cfg: DictConfig) -> LRScheduler | None:
     """
     Build a learning-rate scheduler from the config.
 
@@ -95,7 +95,10 @@ def build_scheduler(optimizer: Optimizer, cfg: DictConfig) -> LRScheduler:
         If the scheduler name is not recognized.
 
     """
-    sched_cfg = cfg.lr_scheduler
+    sched_cfg = cfg.get("lr_scheduler", None)
+    
+    if sched_cfg is None:
+        return None
 
     if sched_cfg.name == "CosineAnnealingLR":
         return CosineAnnealingLR(
@@ -103,5 +106,5 @@ def build_scheduler(optimizer: Optimizer, cfg: DictConfig) -> LRScheduler:
             T_max=sched_cfg.T_max,
             eta_min=sched_cfg.eta_min,
         )
-
-    raise ValueError(f"Unsupported scheduler name: {sched_cfg.name}")
+    
+    return None
