@@ -22,17 +22,19 @@ train:
     contrast: 0.3
     saturation: 0.3
     hue: 0.05          # 0.1 is too aggressive for volleyball — court colors matter
-    
-  - _target_: torchvision.transforms.TrivialAugmentWide   # 🔥 huge regularizer
   
-  - _target_: torchvision.transforms.ToTensor
+  # SEVER FOR THE MODEL 
   
-  - _target_: torchvision.transforms.Normalize
-    mean: [0.485, 0.456, 0.406]
-    std:  [0.229, 0.224, 0.225]
+  # - _target_: torchvision.transforms.TrivialAugmentWide   # 🔥 huge regularizer
+  
+  # - _target_: torchvision.transforms.ToTensor
+  
+  # - _target_: torchvision.transforms.Normalize
+  #   mean: [0.485, 0.456, 0.406]
+  #   std:  [0.229, 0.224, 0.225]
     
-  - _target_: torchvision.transforms.RandomErasing       # 🔥 cuts overfitting 
-    p: 0.25
+  # - _target_: torchvision.transforms.RandomErasing       # 🔥 cuts overfitting 
+  #   p: 0.25
 
 validation:
   - _target_: torchvision.transforms.Resize

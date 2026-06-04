@@ -11,10 +11,17 @@ import random
 from pathlib import Path
 
 import cv2  # ty:ignore[unresolved-import]
+import numpy as np
+import torch
+from hydra import compose, initialize_config_dir
 from matplotlib import pyplot as plt  # ty: ignore[import]  # ty:ignore[unresolved-import]
+from torch.utils.data import DataLoader
 
-from configs.path_config import MAIN_DATASET_DIR, VIDEO_SAMPLE_DIR
+from configs.labels import IDX_TO_GROUP_ACTIVITY
+from configs.path_config import BASE_DIR, MAIN_DATASET_DIR, VIDEO_SAMPLE_DIR
+from src.data.kaggle_data_loader import VolleyballDataset, collate_fn
 from src.pickle_dump import load_from_pickle
+from utils.load_model_config import build_transforms
 
 # ── Video sample directories (used only here) ───────────────────────────────
 
@@ -212,6 +219,110 @@ def visualize_video_fully_annotated(
     else:
         plt.show()
 
+# ImageNet mean/std used for denormalization before display
+_IMAGENET_MEAN = torch.tensor([0.485, 0.456, 0.406]).view(3, 1, 1)
+_IMAGENET_STD  = torch.tensor([0.229, 0.224, 0.225]).view(3, 1, 1)
+
+
+def _denormalize(tensor: torch.Tensor) -> np.ndarray:
+    """Undo ImageNet normalization and convert to uint8 HWC numpy array for display."""
+    img = tensor.cpu().float() * _IMAGENET_STD + _IMAGENET_MEAN
+    img = img.clamp(0.0, 1.0).permute(1, 2, 0).numpy()
+    return (img * 255).astype(np.uint8)
+
+
+def visualize_loader(
+    full_image: bool = True,
+    n_frames: int = 1,
+    batch_size: int = 4,
+    config_name: str = "baseline1",
+    mode: str = "validation",
+) -> None:
+    """Visualize a single batch from the DataLoader using the real config transforms.
+
+    Loads the transform pipeline from ``configs/transforms/default_transforms.yaml``
+    via Hydra, so the images are pre-processed exactly as they are during training.
+
+    Parameters
+    ----------
+    full_image : bool
+        If True, fetch full-image samples. If False, fetch person crops and
+        print their tensor shapes instead of plotting.
+    n_frames : int
+        Number of temporally-sampled frames per sample (must be odd).
+    batch_size : int
+        Number of samples to visualise in a single row.
+    config_name : str
+        Hydra config filename (without extension) to load transforms from.
+    mode : str
+        Dataset split to sample from: ``"train"``, ``"validation"``, or ``"test"``.
+    """
+
+    print(f"[visualize_loader] config={config_name!r}  mode={mode!r}  "
+          f"full_image={full_image}  n_frames={n_frames}  batch_size={batch_size}")
+
+    # ── Load transforms from the Hydra config ────────────────────────────────
+    configs_dir = str(BASE_DIR / "configs")
+    print(f"[visualize_loader] configs_dir={configs_dir!r}")
+    with initialize_config_dir(version_base=None, config_dir=configs_dir):
+        cfg = compose(config_name=config_name)
+
+    transforms_dict = build_transforms(cfg)
+    tf = transforms_dict[mode]   # e.g. validation pipeline: Resize → CenterCrop → ToTensor → Normalize
+    print(f"[visualize_loader] Applied transform pipeline:\n  {tf}")
+
+    # ── Build DataLoader ─────────────────────────────────────────────────────
+    dataset = VolleyballDataset(
+        mode=mode,
+        full_image=full_image,
+        crop=not full_image,
+        n_frames=n_frames,
+        transform=tf,
+    )
+    dl = DataLoader(dataset, batch_size=batch_size, shuffle=True, collate_fn=collate_fn)
+    batch = next(iter(dl))
+
+    # ── Plot ─────────────────────────────────────────────────────────────────
+    if full_image:
+        images, labels = batch
+        # shapes: (B, C, H, W) for n_frames=1  OR  (B, T, C, H, W) for n_frames>1
+
+        fig, axes = plt.subplots(1, batch_size, figsize=(5 * batch_size, 5))
+        if batch_size == 1:
+            axes = [axes]
+
+        for i in range(batch_size):
+            img_tensor = images[i]
+            if n_frames > 1:
+                img_tensor = img_tensor[n_frames // 2]   # pick the middle frame
+
+            img_np = _denormalize(img_tensor)            # undo ImageNet norm for display
+            group_action = IDX_TO_GROUP_ACTIVITY.get(int(labels[i]), "Unknown")
+
+            axes[i].imshow(img_np)
+            axes[i].set_title(
+                f"Label: {group_action}\n"
+                f"Tensor: {tuple(img_tensor.shape)}",
+                fontsize=10, fontweight="bold",
+            )
+            axes[i].axis("off")
+
+        fig.suptitle(
+            f"DataLoader sanity check — {mode} split  |  transforms: {config_name}",
+            fontsize=13, fontweight="bold", y=1.02,
+        )
+        plt.tight_layout()
+        plt.show()
+
+    else:
+        crops, plabels, glabels, masks = batch
+        print(f"  crops   : {crops.shape}")
+        print(f"  plabels : {plabels.shape}")
+        print(f"  glabels : {glabels.shape}")
+        print(f"  masks   : {masks.shape}")
+        print("Crop image grid is skipped — use full_image=True to render an image grid.")
+
 
 if __name__ == "__main__":
-    visualize_video_fully_annotated(n_clips=3)
+    # visualize_video_fully_annotated(n_clips=3)
+    visualize_loader(full_image=True, n_frames=1, batch_size=4, config_name="baseline1", mode="validation")
