@@ -139,7 +139,12 @@ def train_test(cfg: DictConfig) -> None:
     for param in model.backbone.fc.parameters():
         param.requires_grad = True
 
-    optimizer_s1 = optim.AdamW(
+    # optimizer_s1 = optim.AdamW(
+    #     model.backbone.fc.parameters(),
+    #     lr=warmup_lr,
+    #     weight_decay=cfg.get("weight_decay", 0.01),
+    # )
+    optimizer_s1 = optim.SGD(
         model.backbone.fc.parameters(),
         lr=warmup_lr,
         weight_decay=cfg.get("weight_decay", 0.01),
@@ -203,7 +208,15 @@ def train_test(cfg: DictConfig) -> None:
     backbone_params = [p for n, p in model.named_parameters() if "fc" not in n]
     head_params = list(model.backbone.fc.parameters())
 
-    optimizer_s2 = optim.AdamW(
+    # optimizer_s2 = optim.AdamW(
+    #     [
+    #         {"params": backbone_params, "lr": cfg.learning_rate},
+    #         {"params": head_params, "lr": cfg.learning_rate * head_mult},
+    #     ],
+    #     weight_decay=cfg.get("weight_decay", 0.05),
+    # )
+
+    optimizer_s2 = optim.SGD(
         [
             {"params": backbone_params, "lr": cfg.learning_rate},
             {"params": head_params, "lr": cfg.learning_rate * head_mult},
