@@ -251,9 +251,9 @@ Training uses a two-stage strategy: a linear probe (head-only) followed by full 
 
 | Metric | Value |
 |--------|-------|
-| Accuracy | — |
-| Macro F1 | — |
-| Loss | — |
+| Accuracy | 20.8% |
+| Macro F1 | .196 |
+| Loss | 2.4 |
 
 #### Confusion Matrix
 
