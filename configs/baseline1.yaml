@@ -2,7 +2,7 @@ defaults:
   - _self_
   - transforms: default_transforms.yaml
 
-batch_size: 128
+batch_size: 64
 num_workers: 4
 pin_memory: false
 
