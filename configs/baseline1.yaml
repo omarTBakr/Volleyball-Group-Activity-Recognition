@@ -8,13 +8,13 @@ pin_memory: false
 
 # --- Stage 1: Linear probe (head only) ---
 warmup_epochs: 5
-warmup_lr: 1e-4
+warmup_lr: 1e-5
 
 # --- Stage 2: Full fine-tune (differential LR) ---
 num_epochs: 100
 learning_rate: 1e-5
 weight_decay: 0.01
-head_lr_multiplier: 2
+head_lr_multiplier: 1
 
 lr_scheduler:
   name: CosineAnnealingLR
@@ -22,7 +22,7 @@ lr_scheduler:
   eta_min: 1e-6
 
 label_smoothing: 0.1
-early_stopping_patience: 20
+early_stopping_patience: 10
 
 model:
   # name: "resnet50" # underfits the data 

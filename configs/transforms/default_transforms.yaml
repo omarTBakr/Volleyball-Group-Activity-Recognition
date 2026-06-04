@@ -14,8 +14,8 @@ train:
     size: [224, 224]
     scale: [0.7, 1.0]
     
-  # - _target_: torchvision.transforms.RandomHorizontalFlip # too server for the model 
-  #   p: 0.5
+  - _target_: torchvision.transforms.RandomHorizontalFlip
+    p: 0.25
     
   - _target_: torchvision.transforms.ColorJitter
     brightness: 0.3
