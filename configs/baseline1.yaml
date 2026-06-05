@@ -13,23 +13,23 @@ warmup_lr: 1e-2
 # --- Stage 2: Full fine-tune (differential LR) ---
 num_epochs: 50
 learning_rate: 1e-3   # SGD backbone lr
-weight_decay: 5e-4    # SGD-scale (was 0.05 for AdamW)
+weight_decay: 1e-3    # bumped from 5e-4 to fight per-video memorization
 head_lr_multiplier: 10   # head lr = 1e-2
 
 lr_scheduler:
   name: CosineAnnealingLR
   T_max: ${num_epochs}
-  eta_min: 1e-6
+  eta_min: 1e-5
 
 label_smoothing: 0.1
 early_stopping_patience: 15
 
 model:
-  # name: "resnet50" # underfits the data 
-  
-  name: "resnet101"
+  # name: "resnet101" # too much capacity for 24 train videos → per-video memorization
+  name: "resnet50"
   pretrained: true
   weights: "DEFAULT"
+  dropout: 0.4   # head dropout to fight overfit
 
 device: cuda
 seed: 42

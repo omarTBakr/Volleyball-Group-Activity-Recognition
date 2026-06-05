@@ -49,22 +49,33 @@ from utils.utility import (
 
 
 class Model(nn.Module):
-    """Simple ResNet-50 wrapper for single-frame classification."""
+    """ResNet wrapper for single-frame classification with optional head dropout."""
 
-    def __init__(self, num_classes: int = NUM_GROUP_ACTIVITIES, backbone_name: str = "resnet101") -> None:
+    def __init__(
+        self,
+        num_classes: int = NUM_GROUP_ACTIVITIES,
+        backbone_name: str = "resnet50",
+        dropout: float = 0.0,
+    ) -> None:
         super().__init__()
 
         self.num_classes = num_classes
-        
+
         if backbone_name == "resnet50":
             self.backbone = models.resnet50(weights=models.ResNet50_Weights.DEFAULT)
         elif backbone_name == "resnet101":
             self.backbone = models.resnet101(weights=models.ResNet101_Weights.DEFAULT)
-        
-        self.backbone.fc = nn.Linear(self.backbone.fc.in_features, num_classes)
+
+        in_features = self.backbone.fc.in_features
+        if dropout > 0:
+            self.backbone.fc = nn.Sequential(
+                nn.Dropout(p=dropout),
+                nn.Linear(in_features, num_classes),
+            )
+        else:
+            self.backbone.fc = nn.Linear(in_features, num_classes)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """Forward pass through the ResNet-50 backbone."""
         return self.backbone(x)
 
 
@@ -120,7 +131,11 @@ def train_test(cfg: DictConfig) -> None:
     )
 
     # ── Model ────────────────────────────────────────────────────────────
-    model = Model(num_classes=num_classes, backbone_name=cfg.model.name).to(device)
+    model = Model(
+        num_classes=num_classes,
+        backbone_name=cfg.model.name,
+        dropout=cfg.model.get("dropout", 0.0),
+    ).to(device)
     criterion = nn.CrossEntropyLoss(label_smoothing=cfg.get("label_smoothing", 0.0))
 
     best_f1 = 0.0
@@ -143,11 +158,22 @@ def train_test(cfg: DictConfig) -> None:
     for param in model.backbone.fc.parameters():
         param.requires_grad = True
 
-    # optimizer_s1 = optim.AdamW(
-    #     model.backbone.fc.parameters(),
-    #     lr=warmup_lr,
-    #     weight_decay=cfg.get("weight_decay", 0.01),
-    # )
+    # Keep BatchNorm layers whose weights are frozen in eval mode, so their
+    # running stats don't drift even when train_one_epoch flips model.train().
+    # Stage 1: all backbone BN frozen → all eval. Stage 2: only conv1/bn1/layer1/
+    # layer2 BN are frozen → those eval, layer3/layer4 BN train normally.
+    _orig_train = model.train
+
+    def _train_with_frozen_bn(mode: bool = True):
+        _orig_train(mode)
+        if mode:
+            for m in model.modules():
+                if isinstance(m, nn.BatchNorm2d) and not m.weight.requires_grad:
+                    m.eval()
+        return model
+
+    model.train = _train_with_frozen_bn
+
     optimizer_s1 = optim.SGD(
         model.backbone.fc.parameters(),
         lr=warmup_lr,
@@ -211,20 +237,23 @@ def train_test(cfg: DictConfig) -> None:
 
 
 
-    # Unfreeze all parameters
+    # Partial unfreeze: keep conv1/bn1/layer1/layer2 frozen (generic low-level
+    # features), only train layer3, layer4, and the head. Restricts the surface
+    # area available for per-video memorization.
     for param in model.backbone.parameters():
-        param.requires_grad = True
+        param.requires_grad = False
+    for name in ("layer3", "layer4", "fc"):
+        for param in getattr(model.backbone, name).parameters():
+            param.requires_grad = True
 
-    backbone_params = [p for n, p in model.named_parameters() if "fc" not in n]
+    # The frozen-BN train() override from Stage 1 still applies — keeps the
+    # still-frozen early-layer BN stats from drifting.
+
+    backbone_params = [
+        p for n, p in model.named_parameters()
+        if "fc" not in n and p.requires_grad
+    ]
     head_params = list(model.backbone.fc.parameters())
-
-    # optimizer_s2 = optim.AdamW(
-    #     [
-    #         {"params": backbone_params, "lr": cfg.learning_rate},
-    #         {"params": head_params, "lr": cfg.learning_rate * head_mult},
-    #     ],
-    #     weight_decay=cfg.get("weight_decay", 0.05),
-    # )
 
     optimizer_s2 = optim.SGD(
         [
@@ -296,7 +325,11 @@ def train_test(cfg: DictConfig) -> None:
 
     # ── Test Best Model ──────────────────────────────────────────────────
     print("\n--- Testing Best Model ---")
-    best_model = Model(num_classes=num_classes)
+    best_model = Model(
+        num_classes=num_classes,
+        backbone_name=cfg.model.name,
+        dropout=cfg.model.get("dropout", 0.0),
+    )
     best_model, _, _, _, _ = load_model(f"baseline1_{run_id}.pt", best_model)
     best_model.to(device)
 
