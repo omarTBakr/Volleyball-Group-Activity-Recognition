@@ -151,8 +151,12 @@ def train_test(cfg: DictConfig) -> None:
     optimizer_s1 = optim.SGD(
         model.backbone.fc.parameters(),
         lr=warmup_lr,
-        weight_decay=cfg.get("weight_decay", 0.01),
+        momentum=0.9,
+        nesterov=True,
+        weight_decay=cfg.get("weight_decay", 5e-4),
     )
+
+
 
     for epoch in range(warmup_epochs):
         global_epoch += 1
@@ -205,6 +209,8 @@ def train_test(cfg: DictConfig) -> None:
     print(f"  Backbone lr={cfg.learning_rate}, Head lr={cfg.learning_rate * head_mult}")
     print(f"{'='*60}")
 
+
+
     # Unfreeze all parameters
     for param in model.backbone.parameters():
         param.requires_grad = True
@@ -225,7 +231,9 @@ def train_test(cfg: DictConfig) -> None:
             {"params": backbone_params, "lr": cfg.learning_rate},
             {"params": head_params, "lr": cfg.learning_rate * head_mult},
         ],
-        weight_decay=cfg.get("weight_decay", 0.05),
+        momentum=0.9,
+        nesterov=True,
+        weight_decay=cfg.get("weight_decay", 5e-4),
     )
     scheduler = build_scheduler(optimizer_s2, cfg)
 
