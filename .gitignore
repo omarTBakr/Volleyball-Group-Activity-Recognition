@@ -50,3 +50,37 @@ best_model.pth
 #*.jpeg
 #*.png
 #!image.jpeg  # Keep your specific test image if you want it tracked
+
+# --- Latex files ---
+# --- LaTeX Build Artifacts ---
+*.aux        # cross-reference data
+*.bbl        # bibliography output
+*.bcf        # biblatex control file
+*.blg        # bibtex/biber log
+*.fdb_latexmk  # latexmk file database
+*.fls        # latexmk file list
+*.lof        # list of figures
+*.lot        # list of tables
+*.nav        # beamer navigation
+*.out        # hyperref bookmarks
+*.run.xml    # biblatex run file
+*.snm        # beamer slide notes
+*.synctex.gz # SyncTeX reverse-search data
+*.toc        # table of contents
+*.vrb        # beamer verbatim
+*.xdv        # XeLaTeX DVI output
+*.log        # compiler log (if not already ignored)
+*.idx        # index entries
+*.ilg        # index log
+*.ind        # formatted index
+*.glg        # glossary log
+*.glo        # glossary entries
+*.gls        # formatted glossary
+*.acn        # acronym entries
+*.acr        # formatted acronyms
+
+# --- Other temporary files ---
+*.tmp
+*.temp
+*.swp
+*.swo

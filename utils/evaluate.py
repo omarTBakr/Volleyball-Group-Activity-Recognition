@@ -59,7 +59,11 @@ def _build_model(baseline_name: str, cfg: DictConfig) -> nn.Module:
     if baseline_name == "baseline1":
         from models.baseline1 import Model as Baseline1Model
 
-        return Baseline1Model(num_classes=NUM_GROUP_ACTIVITIES)
+        return Baseline1Model(
+            num_classes=NUM_GROUP_ACTIVITIES,
+            backbone_name=cfg.model.name,
+            dropout=cfg.model.get("dropout", 0.0),
+        )
 
     if baseline_name == "baseline3":
         from models.baseline3 import build_model as build_baseline3

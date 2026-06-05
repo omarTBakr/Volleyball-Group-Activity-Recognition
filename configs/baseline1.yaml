@@ -29,7 +29,7 @@ model:
   name: "resnet50"
   pretrained: true
   weights: "DEFAULT"
-  dropout: 0.4   # head dropout to fight overfit
+  dropout: 0   # head dropout to fight overfit
 
 device: cuda
 seed: 42
