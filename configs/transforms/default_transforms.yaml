@@ -22,7 +22,7 @@ train:
     hue: 0.05          # 0.1 is too aggressive for volleyball — court colors matter
   
 
-  # - _target_: torchvision.transforms.TrivialAugmentWide   # disabled — re-enable only if overfitting (train F1 >> val F1)
+  - _target_: torchvision.transforms.TrivialAugmentWide   # disabled — re-enable only if overfitting (train F1 >> val F1)
 
   - _target_: torchvision.transforms.ToTensor
 
