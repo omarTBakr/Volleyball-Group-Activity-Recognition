@@ -22,7 +22,7 @@ lr_scheduler:
   eta_min: 1e-6
 
 label_smoothing: 0.1
-early_stopping_patience: 10
+early_stopping_patience: 15
 
 model:
   # name: "resnet50" # underfits the data 

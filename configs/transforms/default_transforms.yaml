@@ -24,7 +24,7 @@ train:
     hue: 0.05          # 0.1 is too aggressive for volleyball — court colors matter
   
 
-  # - _target_: torchvision.transforms.TrivialAugmentWide   # 🔥 huge regularizer
+  - _target_: torchvision.transforms.TrivialAugmentWide   # 🔥 huge regularizer
   
   - _target_: torchvision.transforms.ToTensor
   
@@ -32,8 +32,8 @@ train:
     mean: [0.485, 0.456, 0.406]
     std:  [0.229, 0.224, 0.225]
     
-  # - _target_: torchvision.transforms.RandomErasing     # disabled — optional regularizer
-  #   p: 0.25
+  - _target_: torchvision.transforms.RandomErasing     # disabled — optional regularizer
+    p: 0.25
 
 
 validation:
