@@ -321,8 +321,6 @@ def train_test(cfg: DictConfig) -> None:
                 print(f"  ⏹ Early stopping — no improvement for {patience} epochs.")
                 break
 
-    writer.close()
-
     # ── Test Best Model ──────────────────────────────────────────────────
     print("\n--- Testing Best Model ---")
     best_model = Model(
@@ -338,7 +336,7 @@ def train_test(cfg: DictConfig) -> None:
     )
     print(f"Final Test -> Loss: {test_loss:.4f}, Acc: {test_acc:.4f}, F1: {test_f1:.4f}")
 
-    # Log test results
+    # Log test results to JSON
     with (run_log_dir / f"{run_id}.json").open("r+") as f:
         data = json.load(f)
         data["test"] = {
@@ -350,7 +348,35 @@ def train_test(cfg: DictConfig) -> None:
         json.dump(data, f, indent=4)
         f.truncate()
 
+    # ── HParams Dashboard ─────────────────────────────────────────────────
+    # Visible in TensorBoard under the "HPARAMS" tab.
+    # Each run appears as one row — compare hyperparameters vs. final metrics
+    # using the parallel-coordinates or scatter-matrix view.
+    hparam_dict = {
+        "baseline":                "baseline1",
+        "batch_size":              cfg.batch_size,
+        "warmup_epochs":           cfg.warmup_epochs,
+        "warmup_lr":               cfg.warmup_lr,
+        "num_epochs":              cfg.num_epochs,
+        "learning_rate":           cfg.learning_rate,
+        "weight_decay":            cfg.weight_decay,
+        "head_lr_multiplier":      cfg.get("head_lr_multiplier", 1),
+        "label_smoothing":         cfg.get("label_smoothing", 0.0),
+        "early_stopping_patience": cfg.get("early_stopping_patience", 0),
+        "scheduler":               cfg.lr_scheduler.name if cfg.get("lr_scheduler") else "none",
+        "backbone":                cfg.model.name,
+        "dropout":                 float(cfg.model.get("dropout", 0.0)),
+    }
+    metric_dict = {
+        "hparam/test_f1":     test_f1,
+        "hparam/test_acc":    test_acc,
+        "hparam/test_loss":   test_loss,
+        "hparam/best_val_f1": best_f1,
+    }
+    writer.add_hparams(hparam_dict, metric_dict)
+
+    writer.close()
+
 
 if __name__ == "__main__":
     train_test()
-
