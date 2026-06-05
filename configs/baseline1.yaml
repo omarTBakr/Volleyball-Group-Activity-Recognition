@@ -7,12 +7,12 @@ num_workers: 4
 pin_memory: false
 
 # --- Stage 1: Linear probe (head only) ---
-warmup_epochs: 5
-warmup_lr: 1e-2
+warmup_epochs: 10
+warmup_lr: 1e-4
 
 # --- Stage 2: Full fine-tune (differential LR) ---
-num_epochs: 50
-learning_rate: 1e-3   # SGD backbone lr
+num_epochs: 100
+learning_rate: 1e-4   # SGD backbone lr
 weight_decay: 1e-3    # bumped from 5e-4 to fight per-video memorization
 head_lr_multiplier: 10   # head lr = 1e-2
 
@@ -21,8 +21,8 @@ lr_scheduler:
   T_max: ${num_epochs}
   eta_min: 1e-5
 
-label_smoothing: 0.1
-early_stopping_patience: 15
+label_smoothing: 0.01
+early_stopping_patience: 25
 
 model:
   # name: "resnet101" # too much capacity for 24 train videos → per-video memorization
