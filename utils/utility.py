@@ -13,6 +13,7 @@ import torch     # ty:ignore[import]  # ty:ignore[unresolved-import]
 from sklearn.metrics import accuracy_score, confusion_matrix, f1_score
 from torch import nn, optim
 from torch.utils.data import DataLoader  # ty:ignore[import]
+from torch.utils.tensorboard import SummaryWriter  # ty:ignore[import]
 from tqdm import tqdm  # ty:ignore[import]
 
 from configs.path_config import MODEL_SAVE_DIR
@@ -317,3 +318,69 @@ def test_one_epoch(
     conf_mat = confusion_matrix(y_true, y_pred)
 
     return loss_epoch, acc_epoch, f1_epoch, conf_mat
+
+
+# ── TensorBoard Experiment Summary ───────────────────────────────────────────
+
+
+def log_experiment_summary(
+    writer: SummaryWriter,
+    run_id: str,
+    hparam_dict: dict,
+    test_f1: float,
+    test_acc: float,
+    test_loss: float,
+    best_val_f1: float,
+) -> None:
+    """Log a self-contained experiment summary to TensorBoard.
+
+    Writes two complementary entries into *writer*:
+
+    * **TEXT tab** — a markdown table of every hyperparameter and final metric.
+      Renders without TensorFlow and is visible immediately.
+    * **HPARAMS tab** — the structured hparam/metric mapping used by the
+      parallel-coordinates and scatter-matrix views (requires TensorFlow).
+
+    Call this once per run, just before ``writer.close()``.
+    All baseline scripts should use this function to keep the TensorBoard
+    output format consistent across experiments.
+
+    Parameters
+    ----------
+    writer : SummaryWriter
+        The open TensorBoard writer for this run.
+    run_id : str
+        Human-readable run identifier (e.g. ``"run7"``).
+    hparam_dict : dict
+        Flat dict of hyperparameter names → scalar or string values.
+        Must include at minimum a ``"baseline"`` key.
+    test_f1 : float
+        Final macro F1 score on the test set.
+    test_acc : float
+        Final accuracy on the test set.
+    test_loss : float
+        Final loss on the test set.
+    best_val_f1 : float
+        Best validation F1 achieved during training.
+    """
+    metric_dict = {
+        "hparam/test_f1":     test_f1,
+        "hparam/test_acc":    test_acc,
+        "hparam/test_loss":   test_loss,
+        "hparam/best_val_f1": best_val_f1,
+    }
+
+    # ── TEXT tab (no TensorFlow required) ────────────────────────────────
+    hparam_rows = "\n".join(f"| `{k}` | {v} |" for k, v in hparam_dict.items())
+    metric_rows = "\n".join(f"| `{k}` | {v:.4f} |" for k, v in metric_dict.items())
+    summary_text = (
+        f"## {run_id}\n\n"
+        f"### Hyperparameters\n\n"
+        f"| Parameter | Value |\n|---|---|\n{hparam_rows}\n\n"
+        f"### Final Metrics\n\n"
+        f"| Metric | Value |\n|---|---|\n{metric_rows}"
+    )
+    writer.add_text("Experiment Summary", summary_text, global_step=0)
+
+    # ── HPARAMS tab (requires TensorFlow for full rendering) ─────────────
+    writer.add_hparams(hparam_dict, metric_dict)

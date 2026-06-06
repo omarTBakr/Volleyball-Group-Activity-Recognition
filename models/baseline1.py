@@ -37,6 +37,7 @@ from utils.load_model_config import build_model, build_scheduler, build_transfor
 from utils.utility import (
     get_device,
     load_model,
+    log_experiment_summary,
     save_model,
     test_one_epoch,
     train_one_epoch,
@@ -348,32 +349,29 @@ def train_test(cfg: DictConfig) -> None:
         json.dump(data, f, indent=4)
         f.truncate()
 
-    # ── HParams Dashboard ─────────────────────────────────────────────────
-    # Visible in TensorBoard under the "HPARAMS" tab.
-    # Each run appears as one row — compare hyperparameters vs. final metrics
-    # using the parallel-coordinates or scatter-matrix view.
-    hparam_dict = {
-        "baseline":                "baseline1",
-        "batch_size":              cfg.batch_size,
-        "warmup_epochs":           cfg.warmup_epochs,
-        "warmup_lr":               cfg.warmup_lr,
-        "num_epochs":              cfg.num_epochs,
-        "learning_rate":           cfg.learning_rate,
-        "weight_decay":            cfg.weight_decay,
-        "head_lr_multiplier":      cfg.get("head_lr_multiplier", 1),
-        "label_smoothing":         cfg.get("label_smoothing", 0.0),
-        "early_stopping_patience": cfg.get("early_stopping_patience", 0),
-        "scheduler":               cfg.lr_scheduler.name if cfg.get("lr_scheduler") else "none",
-        "backbone":                cfg.model.name,
-        "dropout":                 float(cfg.model.get("dropout", 0.0)),
-    }
-    metric_dict = {
-        "hparam/test_f1":     test_f1,
-        "hparam/test_acc":    test_acc,
-        "hparam/test_loss":   test_loss,
-        "hparam/best_val_f1": best_f1,
-    }
-    writer.add_hparams(hparam_dict, metric_dict)
+    log_experiment_summary(
+        writer=writer,
+        run_id=run_id,
+        hparam_dict={
+            "baseline":                "baseline1",
+            "batch_size":              cfg.batch_size,
+            "warmup_epochs":           cfg.warmup_epochs,
+            "warmup_lr":               cfg.warmup_lr,
+            "num_epochs":              cfg.num_epochs,
+            "learning_rate":           cfg.learning_rate,
+            "weight_decay":            cfg.weight_decay,
+            "head_lr_multiplier":      cfg.get("head_lr_multiplier", 1),
+            "label_smoothing":         cfg.get("label_smoothing", 0.0),
+            "early_stopping_patience": cfg.get("early_stopping_patience", 0),
+            "scheduler":               cfg.lr_scheduler.name if cfg.get("lr_scheduler") else "none",
+            "backbone":                cfg.model.name,
+            "dropout":                 float(cfg.model.get("dropout", 0.0)),
+        },
+        test_f1=test_f1,
+        test_acc=test_acc,
+        test_loss=test_loss,
+        best_val_f1=best_f1,
+    )
 
     writer.close()
 

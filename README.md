@@ -255,21 +255,13 @@ Training uses a two-stage strategy: a linear probe (head-only) followed by full 
 | Macro F1 | .196 |
 | Loss | 2.4 |
 
-#### Confusion Matrix
+#### Baseline 1 — Naive Single-Frame Image Classifier
 
-![Confusion Matrix](plots/baseline1/Confusion%20Matrix.png)
-
-#### Classification Report
-
-![Classification Report](plots/baseline1/Classification%20Report.png)
-
-#### Precision-Recall Curves
-
-![Precision-Recall Curves](plots/baseline1/Precision-Recall%20Curves.png)
-
-#### mAP & F1 per Class
-
-![mAP & F1](plots/baseline1/mAP%20%26%20F1%20Score%20per%20Class.png)
+| Confusion Matrix | Classification Report |
+|:---:|:---:|
+| ![Confusion Matrix](plots/baseline1/Confusion%20Matrix.png) | ![Classification Report](plots/baseline1/Classification%20Report.png) |
+| **Precision-Recall Curves** | **mAP & F1 per Class** |
+| ![Precision-Recall Curves](plots/baseline1/Precision-Recall%20Curves.png) | ![mAP & F1](plots/baseline1/mAP%20%26%20F1%20Score%20per%20Class.png) |
 
 ---
 
