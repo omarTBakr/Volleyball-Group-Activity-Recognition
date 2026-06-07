@@ -13,8 +13,10 @@ Drop-in replacement: just change the import in your training script:
     # use:
     from src.data.data_loader_kaggle import VolleyballDataset, collate_fn
 
+
 Everything else (constructor args, return shapes, collate_fn) is identical.
-"""
+"""  # noqa: D205
+
 
 from __future__ import annotations
 

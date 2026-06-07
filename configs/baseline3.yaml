@@ -1,50 +1,49 @@
-# This is the main configuration file for the 'baseline3' experiment.
-
- 
-
 defaults:
-  - _self_   
+  - _self_
   - transforms: default_transforms.yaml
 
-# --- Data and DataLoader Configuration ---
-batch_size: 8
-num_workers: 7
-pin_memory: true
-frame_chunk_size: 4  # Number of frames to process per chunk (use smaller values to reduce GPU memory)
-use_amp: false       # Set to true to enable mixed precision training (requires CUDA)
-accumulation_steps: 1  # Gradient accumulation steps to reduce effective batch memory
+# Batch size is per-clip; each clip in a batch can carry up to ~12 players,
+# so the effective per-step forward count is ~batch_size * P_max.
+# Keep this modest to fit ResNet-50 over many crops in GPU memory.
+batch_size: 32
+num_workers: 4
+pin_memory: false
 
-# These MUST match the group_activity labels in your annotations.txt
-class_names:
-  - l_winpoint
-  - r_winpoint
-  - l-pass
-  - r-pass
-  - l-spike
-  - r_spike
-  - l_set
-  - r_set
+# --- Stage A: Person-action pretraining (9 classes) ---
+# Full ResNet-50 trained end-to-end on per-player crops.
+stage_a:
+  num_epochs: 50
+  learning_rate: 1e-3           # SGD lr for the whole backbone
+  weight_decay: 5e-4
+  early_stopping_patience: 8
 
-# --- Training Configuration ---
-num_epochs: 100
-learning_rate: 0.0001
-# patience: 5 # Used for ReduceLROnPlateau, not typically for CosineAnnealing
-mix_up: true # a boolean flag for a training technique
+# --- Stage B: Group-activity head fine-tune (8 classes) ---
+# Backbone is loaded from Stage A and frozen. Only the MLP head trains.
+stage_b:
+  num_epochs: 50
+  learning_rate: 1e-3           # SGD lr for the MLP head
+  weight_decay: 5e-4
+  hidden_dim: 512               # MLP hidden width: 2048 → hidden_dim → 8
+  dropout: 0.4                  # dropout inside the MLP head
+  early_stopping_patience: 20
 
-# --- Learning Rate Scheduler Configuration ---
-# We configure CosineAnnealingLR here.
+# Cosine schedule applies to Stage B's optimizer (the part that actually
+# updates over a long horizon). Stage A keeps a flat LR.
 lr_scheduler:
-  name: "CosineAnnealingLR"
-  T_max: 100         # Usually set to num_epochs
-  eta_min: 1e-5   # Minimum learning rate to reach
+  name: CosineAnnealingLR
+  T_max: ${stage_b.num_epochs}
+  eta_min: 1e-5
 
-# --- Environment and Reproducibility ---
+label_smoothing: 0.01
+
+model:
+  name: "resnet50"
+  pretrained: true
+  weights: "DEFAULT"
+
 device: cuda
 seed: 42
 
-# --- Output Directory ---
-# Hydra will automatically handle output directories, but you can specify a
-# name for the experiment run.
 hydra:
   run:
     dir: ./runs/baseline3/${now:%Y-%m-%d}/${now:%H-%M-%S}
