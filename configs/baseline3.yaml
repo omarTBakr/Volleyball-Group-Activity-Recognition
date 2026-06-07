@@ -16,7 +16,7 @@ data_parallel: true
 # --- Stage A: Person-action pretraining (9 classes) ---
 # Full ResNet-50 trained end-to-end on per-player crops.
 stage_a:
-  num_epochs: 50
+  num_epochs: 25
   learning_rate: 1e-3           # SGD lr for the whole backbone
   weight_decay: 5e-4
   early_stopping_patience: 8
@@ -29,7 +29,7 @@ stage_b:
   weight_decay: 5e-4
   hidden_dim: 512               # MLP hidden width: 2048 → hidden_dim → 8
   dropout: 0.4                  # dropout inside the MLP head
-  early_stopping_patience: 20
+  early_stopping_patience: 10
 
 # Cosine schedule applies to Stage B's optimizer (the part that actually
 # updates over a long horizon). Stage A keeps a flat LR.
