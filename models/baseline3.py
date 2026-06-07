@@ -42,7 +42,7 @@ from configs.labels import (
 from configs.path_config import LOGS_DIR
 from src.data.kaggle_data_loader import VolleyballDataset, collate_fn
 from utils.load_model_config import build_scheduler, build_transforms
-from utils.utility import get_device, load_model, save_model
+from utils.utility import get_device, load_model, log_experiment_summary, save_model
 
 # ═════════════════════════════════════════════════════════════════════════════
 # ══ 1. MODEL CLASSES ══
@@ -450,8 +450,6 @@ def train_test(cfg: DictConfig) -> None:
                 print(f"  ⏹ Stage-B early stopping — no improvement for {patience_b} epochs.")
                 break
 
-    writer.close()
-
     # ── Test best Stage-B model ──────────────────────────────────────────
     print("\n--- Testing best Stage-B model ---")
     fresh_person = PersonActionResNet(num_classes=NUM_PERSON_ACTIONS, pretrained=False).to(device)
@@ -474,6 +472,35 @@ def train_test(cfg: DictConfig) -> None:
         f.seek(0)
         json.dump(data, f, indent=4)
         f.truncate()
+
+    log_experiment_summary(
+        writer=writer,
+        run_id=run_id,
+        hparam_dict={
+            "baseline":                "baseline3",
+            "batch_size":              cfg.batch_size,
+            "stage_a_epochs":          stage_a_cfg.num_epochs,
+            "stage_a_lr":              stage_a_cfg.learning_rate,
+            "stage_a_weight_decay":    stage_a_cfg.get("weight_decay", 0.0),
+            "stage_a_patience":        stage_a_cfg.get("early_stopping_patience", 0),
+            "stage_b_epochs":          stage_b_cfg.num_epochs,
+            "stage_b_lr":              stage_b_cfg.learning_rate,
+            "stage_b_weight_decay":    stage_b_cfg.get("weight_decay", 0.0),
+            "stage_b_hidden_dim":      stage_b_cfg.hidden_dim,
+            "stage_b_dropout":         float(stage_b_cfg.get("dropout", 0.0)),
+            "stage_b_patience":        stage_b_cfg.get("early_stopping_patience", 0),
+            "label_smoothing":         cfg.get("label_smoothing", 0.0),
+            "scheduler":               cfg.lr_scheduler.name if cfg.get("lr_scheduler") else "none",
+            "backbone":                cfg.model.name,
+            "best_stage_a_val_f1":     best_f1_a,
+        },
+        test_f1=test_f1,
+        test_acc=test_acc,
+        test_loss=test_loss,
+        best_val_f1=best_f1_b,
+    )
+
+    writer.close()
 
 
 if __name__ == "__main__":
