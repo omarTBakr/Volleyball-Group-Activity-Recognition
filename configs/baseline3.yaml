@@ -8,6 +8,10 @@ defaults:
 batch_size: 8
 num_workers: 4
 pin_memory: false
+# Use both Kaggle T4s via nn.DataParallel. Each GPU sees batch_size/n_gpus,
+# so once enabled you can ~double batch_size before per-GPU memory matches the
+# single-GPU peak. Set false to fall back to single-GPU.
+data_parallel: true
 
 # --- Stage A: Person-action pretraining (9 classes) ---
 # Full ResNet-50 trained end-to-end on per-player crops.

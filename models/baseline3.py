@@ -320,6 +320,17 @@ def train_test(cfg: DictConfig) -> None:
         pretrained=cfg.model.get("pretrained", True),
     ).to(device)
 
+    # Keep an unwrapped reference for checkpoint I/O (DataParallel prefixes
+    # state-dict keys with "module."; saving the inner module keeps checkpoints
+    # round-trippable into either wrapped or unwrapped models).
+    person_inner = person_model
+
+    n_gpus = torch.cuda.device_count() if device.type == "cuda" else 0
+    use_dp = n_gpus > 1 and cfg.get("data_parallel", True)
+    if use_dp:
+        print(f"  DataParallel across {n_gpus} GPUs (each sees batch_size/{n_gpus})")
+        person_model = nn.DataParallel(person_model)
+
     criterion_a = nn.CrossEntropyLoss(label_smoothing=cfg.get("label_smoothing", 0.0))
     optimizer_a = optim.SGD(
         person_model.parameters(),
@@ -365,7 +376,7 @@ def train_test(cfg: DictConfig) -> None:
         if val_f1 > best_f1_a:
             best_f1_a = val_f1
             epochs_without_improvement = 0
-            save_model(stage_a_ckpt, global_epoch, person_model, optimizer_a, val_loss,
+            save_model(stage_a_ckpt, global_epoch, person_inner, optimizer_a, val_loss,
                        class_to_idx=PERSON_ACTION_TO_IDX)
             print(f"  ✓ New best Stage-A model saved (person F1: {best_f1_a:.4f})")
         else:
@@ -380,11 +391,11 @@ def train_test(cfg: DictConfig) -> None:
     stage_b_cfg = cfg.stage_b
     print(f"\n{'='*60}")
     print(f"  STAGE B: Group-Activity (frozen backbone) ({stage_b_cfg.num_epochs} epochs)")
-    print(f"  MLP head: {person_model.feature_dim} → {stage_b_cfg.hidden_dim} → {NUM_GROUP_ACTIVITIES}")
+    print(f"  MLP head: {person_inner.feature_dim} → {stage_b_cfg.hidden_dim} → {NUM_GROUP_ACTIVITIES}")
     print(f"{'='*60}")
 
-    # Reload best Stage-A weights into a fresh ResNet so we always start B from the
-    # best person-action checkpoint, not the last epoch's.
+    # Reload best Stage-A weights into a fresh (unwrapped) ResNet so we always start
+    # B from the best person-action checkpoint, not the last epoch's.
     reloaded = PersonActionResNet(num_classes=NUM_PERSON_ACTIONS, pretrained=False).to(device)
     reloaded, _, _, _, _ = load_model(stage_a_ckpt, reloaded)
 
@@ -394,10 +405,15 @@ def train_test(cfg: DictConfig) -> None:
         hidden_dim=stage_b_cfg.hidden_dim,
         dropout=stage_b_cfg.get("dropout", 0.4),
     ).to(device)
+    group_inner = group_model
+
+    if use_dp:
+        print(f"  DataParallel across {n_gpus} GPUs")
+        group_model = nn.DataParallel(group_model)
 
     criterion_b = nn.CrossEntropyLoss(label_smoothing=cfg.get("label_smoothing", 0.0))
     optimizer_b = optim.SGD(
-        group_model.classifier.parameters(),
+        group_inner.classifier.parameters(),
         lr=stage_b_cfg.learning_rate,
         momentum=0.9,
         nesterov=True,
@@ -448,7 +464,7 @@ def train_test(cfg: DictConfig) -> None:
         if val_f1 > best_f1_b:
             best_f1_b = val_f1
             epochs_without_improvement = 0
-            save_model(stage_b_ckpt, global_epoch, group_model, optimizer_b, val_loss,
+            save_model(stage_b_ckpt, global_epoch, group_inner, optimizer_b, val_loss,
                        class_to_idx=GROUP_ACTIVITY_TO_IDX)
             print(f"  ✓ New best Stage-B model saved (group F1: {best_f1_b:.4f})")
         else:
@@ -467,6 +483,8 @@ def train_test(cfg: DictConfig) -> None:
         dropout=stage_b_cfg.get("dropout", 0.4),
     ).to(device)
     best_group, _, _, _, _ = load_model(stage_b_ckpt, best_group)
+    if use_dp:
+        best_group = nn.DataParallel(best_group)
 
     test_loss, test_acc, test_f1 = _epoch_stage_b(
         best_group, test_loader, criterion_b, None, device, "Test[B]",
