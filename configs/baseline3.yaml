@@ -5,7 +5,7 @@ defaults:
 # Batch size is per-clip; each clip in a batch can carry up to ~12 players,
 # so the effective per-step forward count is ~batch_size * P_max.
 # Keep this modest to fit ResNet-50 over many crops in GPU memory.
-batch_size: 32
+batch_size: 16
 num_workers: 4
 pin_memory: false
 
