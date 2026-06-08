@@ -2,9 +2,9 @@
 
 A deep learning pipeline for **group activity recognition** in volleyball videos, based on the [CVPR 2016 paper](https://www.cs.sfu.ca/~mori/research/papers/ibrahim-cvpr16.pdf) by Mostafa S. Ibrahim et al.
 
-[![Sample clip — click to play](reports/figures/output_thumbnail.jpg)](output.mp4)
+![Sample clip](reports/figures/output_sample.gif)
 
-> GitHub's Markdown does not auto-embed `.mp4` files. The thumbnail above is a static frame; **click it** to open the full clip in GitHub's player. For true inline playback, drag-and-drop `output.mp4` into a GitHub issue/PR to upload it to the attachment CDN, then paste the resulting `user-attachments.githubusercontent.com/...` URL on its own line in place of the thumbnail.
+> The animated GIF above plays inline on github.com (no video player needed). The full-resolution H.264 MP4 is at [`output.mp4`](output.mp4) — click to view it in the GitHub blob viewer. For *true* inline `<video>` playback embedded in the README, drag-and-drop `output.mp4` into a GitHub issue/PR; GitHub will upload it to its attachment CDN and produce a `user-attachments.githubusercontent.com/...` URL that you can paste on its own line in place of the image above.
 
 ---
 
