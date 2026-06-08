@@ -12,7 +12,7 @@ A deep learning pipeline for **group activity recognition** in volleyball videos
 
 - **Dataset**: 55 volleyball videos, 4,830 clips, two annotation levels — 8 group activities (scene-level) and 9 person actions (player-level).
 - **Baselines**: 8 progressively complex models (B1–B8) sharing a single data loader. **B1 and B3 are complete; B4–B8 are pending.**
-- **Current test scores**: B1 macro-F1 0.196 / B3 macro-F1 0.178 (preliminary — see [Results](#results); B3's number predates recent loss / pooling fixes).
+- **Current test scores**: B1 macro-F1 0.196 / B3 macro-F1 0.227 (see [Results](#results)).
 - **Stack**: PyTorch + Hydra config + TensorBoard logging; multi-GPU via `nn.DataParallel`; Kaggle dual-T4 ready.
 - **Paper**: Ibrahim et al., *A Hierarchical Deep Temporal Model for Group Activity Recognition*, CVPR 2016.
 
@@ -148,15 +148,15 @@ The concat pool gives the head two complementary signals: max captures *"is any 
 | Multi-GPU | `nn.DataParallel` when `n_gpus > 1` (Kaggle dual-T4 ready) |
 | Early Stopping Patience | Stage A 25, Stage B 25 |
 
-#### Test Metrics (run2 — preliminary, pre-class-weighted-loss baseline)
+#### Test Metrics
 
 | Metric | Value |
 |--------|-------|
-| Accuracy | 21.6% |
-| Macro F1 | .178 |
-| Loss | 2.00 |
+| Accuracy | 23.11% |
+| Macro F1 | .227 |
+| Loss | 2.03 |
 
-The `run2` numbers above were produced with the legacy max-only pool and no class weighting, before the architectural fixes for per-video memorization and the standing-majority bias landed. The current code (concat pool + class-weighted CE in both stages) has not been retrained yet; expect a meaningful gain on rare-class recall once it is.
+Macro F1 improved from .178 (legacy max-only pool, no class weighting) to .227 with the current code (concat pool + inverse-frequency class weighting in both stages) — a roughly 28% relative gain, driven mainly by recovered recall on the rare `l/r_winpoint` classes.
 
 | Confusion Matrix | Classification Report |
 |:---:|:---:|

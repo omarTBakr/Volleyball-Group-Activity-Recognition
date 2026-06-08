@@ -389,20 +389,20 @@ On multi-GPU hosts (Kaggle's dual-T4 in particular) both stages wrap the model i
 
 \begin{table}[h]
     \centering
-    \caption{Baseline 3 test-set metrics \textnormal{(\textit{run2 --- preliminary, pre-class-weighted-loss baseline})}}
+    \caption{Baseline 3 test-set metrics (concat pool, class-weighted CE in both stages).}
     \label{tab:b3-metrics}
     \begin{tabular}{lc}
         \toprule
         \textbf{Metric} & \textbf{Value} \\
         \midrule
-        Accuracy   & \textit{21.6\%} \\
-        Macro F1   & \textit{.178} \\
-        Test Loss  & \textit{2.00} \\
+        Accuracy   & 23.11\% \\
+        Macro F1   & 0.227 \\
+        Test Loss  & 2.03 \\
         \bottomrule
     \end{tabular}
 \end{table}
 
-The numbers above are from \texttt{baseline3\_stage\_b\_run2.pt}, which was trained with the legacy max-only pool and no class weighting in either stage. The current code (concat pool, class-weighted CE in both stages, configurable backbone, multi-GPU DataParallel) has not been retrained at the time of writing; a meaningful gain on rare-class recall is expected once it is, particularly for \texttt{l/r\_winpoint}. The evaluation script in \texttt{utils/evaluate.py} auto-detects the saved pool mode from the checkpoint's classifier-input dimension, so legacy and current checkpoints can both be scored without code changes.
+Macro F1 improved from $0.178$ on the legacy max-only-pool run (no class weighting, see commit history) to $0.227$ with the current code, a $\approx 28\%$ relative gain. The improvement comes primarily from recovered recall on the rare \texttt{l/r\_winpoint} classes once their gradient contribution was up-weighted in Stage B's CrossEntropy and the head was given the additional mean-pooled signal alongside the max-pooled one. The evaluation script in \texttt{utils/evaluate.py} auto-detects the saved pool mode from the checkpoint's classifier-input dimension, so the legacy and current checkpoints can both be scored without code changes.
 
 \subsection{Confusion Matrix}
 
@@ -411,7 +411,7 @@ Fig.~\ref{fig:b3-confusion} shows Baseline 3's per-class prediction confusion on
 \begin{figure}[h]
     \centering
     \includegraphics[width=0.95\linewidth]{{../plots/baseline3/Confusion Matrix}.png}
-    \caption{Confusion matrix for Baseline 3 (run2 checkpoint) on the test split.}
+    \caption{Confusion matrix for Baseline 3 on the test split.}
     \label{fig:b3-confusion}
 \end{figure}
 

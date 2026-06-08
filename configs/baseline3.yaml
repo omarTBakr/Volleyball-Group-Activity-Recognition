@@ -16,10 +16,10 @@ data_parallel: true
 # --- Stage A: Person-action pretraining (9 classes) ---
 # Full ResNet-50 trained end-to-end on per-player crops.
 stage_a:
-  num_epochs: 100
+  num_epochs: 50
   learning_rate: 1e-3           # SGD lr for the whole backbone
   weight_decay: 5e-4
-  early_stopping_patience: 25
+  early_stopping_patience: 10
   # Inverse-frequency class weights in CE. Counters the "standing" majority
   # bias so the backbone learns to separate spiking/setting/passing — the
   # actions that actually carry signal for Stage B. Set false for plain CE.
@@ -28,7 +28,7 @@ stage_a:
 # --- Stage B: Group-activity head fine-tune (8 classes) ---
 # Backbone is loaded from Stage A and frozen. Only the MLP head trains.
 stage_b:
-  num_epochs: 100
+  num_epochs: 50
   learning_rate: 1e-3           # SGD lr for the MLP head
   weight_decay: 5e-4
   hidden_dim: 512               # MLP hidden width
@@ -37,7 +37,7 @@ stage_b:
   # "max" → legacy behavior, classifier input = feature_dim (set this if loading
   # a checkpoint trained before the concat-pool change).
   pool: "concat"
-  early_stopping_patience: 25
+  early_stopping_patience: 10
   # Inverse-frequency CE weights for the 8 group-activity classes. l/r_winpoint
   # are ~2.5× rarer than the spike/pass/set classes, so without this the head
   # suppresses winpoint predictions. Set false for plain CE.
