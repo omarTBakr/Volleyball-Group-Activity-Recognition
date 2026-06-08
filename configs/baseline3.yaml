@@ -31,9 +31,17 @@ stage_b:
   num_epochs: 100
   learning_rate: 1e-3           # SGD lr for the MLP head
   weight_decay: 5e-4
-  hidden_dim: 512               # MLP hidden width: 2048 → hidden_dim → 8
+  hidden_dim: 512               # MLP hidden width
   dropout: 0.4                  # dropout inside the MLP head
+  # Player-dim aggregation. "concat" → [max|mean], classifier input = 2·feature_dim.
+  # "max" → legacy behavior, classifier input = feature_dim (set this if loading
+  # a checkpoint trained before the concat-pool change).
+  pool: "concat"
   early_stopping_patience: 25
+  # Inverse-frequency CE weights for the 8 group-activity classes. l/r_winpoint
+  # are ~2.5× rarer than the spike/pass/set classes, so without this the head
+  # suppresses winpoint predictions. Set false for plain CE.
+  class_weighted_loss: true
 
 # Cosine schedule applies to Stage B's optimizer (the part that actually
 # updates over a long horizon). Stage A keeps a flat LR.
@@ -45,6 +53,10 @@ lr_scheduler:
 label_smoothing: 0.01
 
 model:
+  # Backbone for the per-player ResNet used in both stages. Supported:
+  #   resnet50   — 25M params, 2048-dim features. Default.
+  #   resnet101  — 44M params, 2048-dim features. Slower; try if Stage A is
+  #                under-fitting the 9 person-action classes.
   name: "resnet50"
   pretrained: true
   weights: "DEFAULT"

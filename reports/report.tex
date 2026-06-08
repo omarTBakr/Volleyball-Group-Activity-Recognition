@@ -63,7 +63,7 @@
 %----------------------------------------------------------
 
 \begin{abstract}
-   This report documents the data pipeline, loader architecture, and first experimental results for the Volleyball Group Activity Recognition project. The dataset, introduced in the CVPR 2016 paper by Mostafa S. Ibrahim et al., contains 55 volleyball videos with two annotation levels: 8 scene-level group activities and 9 player-level individual actions. We describe the two-stage parsing pipeline that unifies three raw annotation sources into a single fast-loading pickle cache, and the generic PyTorch data loader that supports all eight baseline models (B1--B8). We also present Baseline 1 (B1), a two-stage fine-tuned ResNet-50 single-frame classifier, including its training configuration and test-set evaluation.
+   This report documents the data pipeline, loader architecture, and first experimental results for the Volleyball Group Activity Recognition project. The dataset, introduced in the CVPR 2016 paper by Mostafa S. Ibrahim et al., contains 55 volleyball videos with two annotation levels: 8 scene-level group activities and 9 player-level individual actions. We describe the two-stage parsing pipeline that unifies three raw annotation sources into a single fast-loading pickle cache, and the generic PyTorch data loader that supports all eight baseline models (B1--B8). We present two completed baselines: \emph{Baseline 1} (B1), a two-stage fine-tuned ResNet-50 single-frame classifier; and \emph{Baseline 3} (B3), a person-then-group architecture that first trains a ResNet-50 on player crops for the 9 person-action labels, then freezes that backbone and learns an MLP on max+mean-concat-pooled per-player features to predict the 8 group activities. Both baselines are reported with training configuration and test-set evaluation.
 \end{abstract}
 
 %----------------------------------------------------------
@@ -268,7 +268,7 @@ The project implements a progressive series of baseline models, each adding comp
 
 \begin{itemize}
     \item \textbf{B1}: Fine-tune ResNet50 on the middle frame as an 8-class image classifier.
-    \item \textbf{B3}: Fine-tune ResNet50 on cropped persons (9 action classes), extract features, max-pool all players, train NN over 8 group classes.
+    \item \textbf{B3}: Fine-tune ResNet50 on cropped persons (9 action classes); freeze the backbone, max+mean concat-pool all per-player features, train MLP over 8 group classes.
     \item \textbf{B4}: Extract frame-level representations using B1's backbone over 9 frames, train LSTM on the temporal sequence.
     \item \textbf{B5}: LSTM on per-player temporal crops, max-pool player representations, classify with NN.
     \item \textbf{B6}: Pool person features per frame, then LSTM on the image-level sequence.
@@ -341,6 +341,80 @@ Fig.~\ref{fig:b1-confusion} shows the per-class prediction confusion on the test
     \label{fig:b1-confusion}
 \end{figure}
 
+\section{Baseline 3: Person-Then-Group Crop Classifier}
+
+\subsection{Architecture}
+
+Baseline 3 decomposes group activity recognition into two stages, each with its own objective. \textbf{Stage A} treats each player crop as an independent training sample and fine-tunes a ResNet-50 end-to-end to predict its 9-class person action (\texttt{blocking}, \texttt{digging}, \dots, \texttt{waiting}). \textbf{Stage B} loads the trained backbone, replaces its final fully-connected layer with \texttt{Identity} (so it emits a 2048-dim feature vector per crop), freezes all backbone parameters, then for each clip pushes its per-player crops through the backbone to produce a $(P, 2048)$ feature matrix, aggregates across the player dimension by concatenating max-pool and mean-pool to obtain a $(2 \times 2048)$-wide vector, and feeds that to a small MLP head that classifies the 8 group activities.
+
+The dual aggregation is motivated by the side-conditioned nature of the group classes (\texttt{l-spike} vs \texttt{r\_spike}, etc.): max-pool answers \emph{``is any player exhibiting feature $k$ strongly?''} while mean-pool answers \emph{``what is the typical team level of feature $k$?''} The concatenated vector lets the head exploit both signals without committing to one aggregation. Padded player slots are excluded from both pools via the per-clip mask returned by the crop-mode collate function (padded crops are driven to $-\infty$ for max-pool and to $0$ for mean-pool, then mean is divided by the per-clip count of valid players).
+
+\subsection{Training Strategy}
+
+Both stages use SGD with momentum 0.9 and Nesterov, plus inverse-frequency CrossEntropy weights ($w_k = N / (K \cdot n_k)$) computed from the train split's clip metadata.
+
+\begin{enumerate}[leftmargin=*]
+    \item \textbf{Stage A (person-action pretraining).} The full ResNet-50 trains on per-crop 9-class CE. Without class weighting the loss collapses on \texttt{standing} (the majority class, $\approx$70\% of all crops) and the backbone never learns to discriminate the minority actions that carry signal for Stage B. With inverse-frequency weights the gradient pull on the rare actions (\texttt{spiking}, \texttt{setting}, \texttt{falling}) is restored to be roughly equal to that on \texttt{standing}.
+    \item \textbf{Stage B (group-activity head).} The backbone is loaded from Stage A's best checkpoint, its \texttt{fc} replaced with \texttt{Identity}, and frozen (BatchNorm running stats are held in \texttt{eval} mode via a \texttt{train()} override on the wrapper module so they do not drift). Only the MLP head trains. Class weighting is applied again because the group split is skewed: \texttt{l/r\_winpoint} are $\approx$2.5$\times$ rarer than the spike/pass/set classes.
+\end{enumerate}
+
+On multi-GPU hosts (Kaggle's dual-T4 in particular) both stages wrap the model in \texttt{nn.DataParallel} when more than one CUDA device is visible. Checkpoint state-dicts are saved from the unwrapped inner module so they round-trip cleanly into either a wrapped or unwrapped model.
+
+\begin{table}[h]
+    \centering
+    \caption{Baseline 3 hyperparameters}
+    \label{tab:b3-hyperparams}
+    \begin{tabular}{ll}
+        \toprule
+        \textbf{Hyperparameter} & \textbf{Value} \\
+        \midrule
+        Backbone                  & ResNet-50 (pretrained) \\
+        Stage A max epochs        & 100, $\text{lr} = 10^{-3}$, full backbone \\
+        Stage B max epochs        & 100, $\text{lr} = 10^{-3}$, frozen backbone \\
+        Stage B pool              & max + mean concat ($2 \times 2048$) \\
+        MLP head                  & Linear($4096, 512$) $\to$ ReLU $\to$ Dropout(0.4) $\to$ Linear($512, 8$) \\
+        Optimizer                 & SGD, momentum 0.9, Nesterov \\
+        LR scheduler (Stage B)    & CosineAnnealingLR \\
+        Label smoothing           & 0.01 \\
+        Weight decay              & $5 \times 10^{-4}$ \\
+        Class-weighted loss       & both stages, inverse-frequency \\
+        Batch size                & 16 (per-clip) \\
+        Early stopping            & patience = 25 epochs per stage \\
+        Multi-GPU                 & \texttt{nn.DataParallel} when $n_{\text{gpus}} > 1$ \\
+        \bottomrule
+    \end{tabular}
+\end{table}
+
+\subsection{Test-Set Performance}
+
+\begin{table}[h]
+    \centering
+    \caption{Baseline 3 test-set metrics \textnormal{(\textit{run2 --- preliminary, pre-class-weighted-loss baseline})}}
+    \label{tab:b3-metrics}
+    \begin{tabular}{lc}
+        \toprule
+        \textbf{Metric} & \textbf{Value} \\
+        \midrule
+        Accuracy   & \textit{21.6\%} \\
+        Macro F1   & \textit{.178} \\
+        Test Loss  & \textit{2.00} \\
+        \bottomrule
+    \end{tabular}
+\end{table}
+
+The numbers above are from \texttt{baseline3\_stage\_b\_run2.pt}, which was trained with the legacy max-only pool and no class weighting in either stage. The current code (concat pool, class-weighted CE in both stages, configurable backbone, multi-GPU DataParallel) has not been retrained at the time of writing; a meaningful gain on rare-class recall is expected once it is, particularly for \texttt{l/r\_winpoint}. The evaluation script in \texttt{utils/evaluate.py} auto-detects the saved pool mode from the checkpoint's classifier-input dimension, so legacy and current checkpoints can both be scored without code changes.
+
+\subsection{Confusion Matrix}
+
+Fig.~\ref{fig:b3-confusion} shows Baseline 3's per-class prediction confusion on the test split.
+
+\begin{figure}[h]
+    \centering
+    \includegraphics[width=0.95\linewidth]{{../plots/baseline3/Confusion Matrix}.png}
+    \caption{Confusion matrix for Baseline 3 (run2 checkpoint) on the test split.}
+    \label{fig:b3-confusion}
+\end{figure}
+
 \section{Project Structure}
 
 The codebase is organized as follows:
@@ -352,6 +426,7 @@ The codebase is organized as follows:
     \item \texttt{src/data/kaggle\_data\_loader.py} --- Generic PyTorch Dataset and collate function.
     \item \texttt{src/data/data\_summary.py} --- Dataset statistics and class distributions.
     \item \texttt{models/baseline1.py} --- B1: two-stage fine-tuned ResNet-50 (\textit{complete}).
+    \item \texttt{models/baseline3.py} --- B3: person-then-group crop classifier (\textit{complete}).
     \item \texttt{utils/utility.py} --- Training/evaluation loop helpers.
     \item \texttt{utils/evaluate.py} --- Post-training evaluation: loads checkpoint, runs inference, generates all metric plots.
     \item \texttt{utils/plotting.py} --- Confusion matrix, classification report, PR curves, mAP bar chart.

@@ -133,6 +133,143 @@ def load_model(
     return model, optimizer, epoch, loss, class_to_idx
 
 
+# ── Generic Epoch Driver ─────────────────────────────────────────────────────
+#
+# A single implementation behind train_one_epoch / validate_one_epoch /
+# test_one_epoch. The legacy 2-tuple `(data, target)` → `model(data)` contract
+# is preserved by the default `batch_unpack`. Baselines whose data loaders
+# return more than two items per batch (e.g. baseline3's crop-mode 4-tuple of
+# ``(crops, person_labels, group_labels, masks)``) or whose models take more
+# than one positional input (e.g. baseline3's GroupActivityModel takes both
+# crops and masks) plug in a custom unpacker without modifying the shared loop.
+
+from collections.abc import Callable
+from typing import Any
+
+# A batch-unpacker takes a raw batch off the dataloader and returns either
+# `None` (skip this batch) or a 2-tuple `(model_inputs, target)` where
+# `model_inputs` is itself a tuple of tensors expanded into ``model(*inputs)``.
+BatchUnpack = Callable[[Any], tuple[tuple[torch.Tensor, ...], torch.Tensor] | None]
+
+
+def _default_batch_unpack(batch: Any) -> tuple[tuple[torch.Tensor, ...], torch.Tensor] | None:
+    """Legacy contract: 2-tuple ``(data, target)`` → single-input model call."""
+    if batch is None or len(batch) < 2:
+        return None
+    data, target = batch[0], batch[1]
+    return (data,), target
+
+
+def _run_one_epoch(
+    model: nn.Module,
+    dataloader: DataLoader,
+    criterion: nn.Module,
+    optimizer: optim.Optimizer | None,
+    device: torch.device,
+    *,
+    batch_unpack: BatchUnpack | None = None,
+    num_classes: int | None = None,
+    desc: str = "Epoch",
+) -> tuple[float, float, float, np.ndarray]:
+    """
+    Run one pass over *dataloader* — training when *optimizer* is provided,
+    evaluation when it is None.
+
+    Parameters
+    ----------
+    model, dataloader, criterion, device
+        Standard PyTorch training inputs.
+    optimizer : optim.Optimizer or None
+        Provide an optimizer to train; pass ``None`` to run in eval / no-grad
+        mode (used by validate_one_epoch / test_one_epoch).
+    batch_unpack : BatchUnpack, optional
+        Callable that converts a raw batch into ``(model_inputs, target)``,
+        where ``model_inputs`` is a tuple expanded into ``model(*inputs)``.
+        Default unpacker keeps the legacy 2-tuple ``(data, target)`` contract,
+        so existing baselines need no change.
+    num_classes : int, optional
+        If provided, macro F1 and the confusion matrix are computed over
+        ``labels=range(num_classes)``, guaranteeing the metric/matrix shape
+        is stable even when a class happens to be absent from an epoch.
+        Pass ``None`` (default) for legacy behavior (sklearn auto-detection).
+    desc : str
+        tqdm progress-bar description.
+
+    Returns
+    -------
+    (loss, accuracy, f1, confusion_matrix)
+        Mean per-batch loss, accuracy, macro-F1, and confusion matrix
+        accumulated over every processed batch. Batches that the unpacker
+        rejects (returns None) are skipped and don't contribute to any
+        statistic.
+    """
+    is_train = optimizer is not None
+    unpack = batch_unpack or _default_batch_unpack
+
+    y_true: list[int] = []
+    y_pred: list[int] = []
+    running_loss = 0.0
+    n_steps = 0
+
+    model.train(is_train)
+
+    pbar = tqdm(dataloader, desc=desc, unit="batch", dynamic_ncols=True, leave=True)
+    for batch in pbar:
+        if not batch:
+            continue
+        unpacked = unpack(batch)
+        if unpacked is None:
+            continue
+        inputs, target = unpacked
+        if not isinstance(inputs, tuple):
+            inputs = (inputs,)
+        if target.numel() == 0:
+            continue
+
+        inputs = tuple(t.to(device, non_blocking=True) for t in inputs)
+        target = target.to(device, non_blocking=True)
+
+        with torch.set_grad_enabled(is_train):
+            output = model(*inputs)
+            loss = criterion(output, target)
+
+        if is_train:
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
+
+        running_loss += loss.item()
+        n_steps += 1
+
+        y_true.extend(target.detach().cpu().tolist())
+        y_pred.extend(output.argmax(dim=1).detach().cpu().tolist())
+
+    loss_epoch = running_loss / max(n_steps, 1)
+
+    if y_true:
+        acc_epoch = float(accuracy_score(y_true, y_pred))
+        if num_classes is not None:
+            f1_epoch = float(f1_score(
+                y_true, y_pred,
+                labels=list(range(num_classes)),
+                average="macro",
+                zero_division=0,
+            ))
+            conf_mat = confusion_matrix(
+                y_true, y_pred, labels=list(range(num_classes)),
+            )
+        else:
+            f1_epoch = float(f1_score(y_true, y_pred, average="macro"))
+            conf_mat = confusion_matrix(y_true, y_pred)
+    else:
+        acc_epoch = 0.0
+        f1_epoch = 0.0
+        n = num_classes if num_classes is not None else 1
+        conf_mat = np.zeros((n, n), dtype=int)
+
+    return loss_epoch, acc_epoch, f1_epoch, conf_mat
+
+
 # ── Training Loop ────────────────────────────────────────────────────────────
 
 
@@ -142,62 +279,27 @@ def train_one_epoch(
     criterion: nn.Module,
     optimizer: optim.Optimizer,
     device: torch.device,
+    *,
+    batch_unpack: BatchUnpack | None = None,
+    num_classes: int | None = None,
+    desc: str = "Training",
 ) -> tuple[float, float, float, np.ndarray]:
     """
-    Train the model for a single epoch.
+    Train the model for one epoch and return ``(loss, acc, f1, conf_mat)``.
 
-    Iterates over every batch in *dataloader*, performing forward pass,
-    loss computation, back-propagation, and optimizer step.  Epoch-level
-    metrics are computed from the accumulated predictions.
+    Legacy callers (``train_one_epoch(model, loader, criterion, opt, device)``)
+    continue to work unchanged: the default unpacker handles the standard
+    ``(data, target)`` batch contract and dispatches to ``model(data)``.
 
-    Parameters
-    ----------
-    model : nn.Module
-        The model to train.  Will be set to ``model.train()`` mode.
-    dataloader : DataLoader
-        Training data loader.
-    criterion : nn.Module
-        Loss function (e.g. ``nn.CrossEntropyLoss()``).
-    optimizer : optim.Optimizer
-        Optimizer instance used to update model weights.
-    device : torch.device
-        Target device (``"cpu"`` or ``"cuda"``).
-
-    Returns
-    -------
-    tuple[float, float, float, np.ndarray]
-        ``(loss, accuracy, f1_score, confusion_matrix)`` where loss is
-        the mean batch loss, accuracy and F1 are macro-averaged, and
-        confusion_matrix has shape ``(n_classes, n_classes)``.
-
+    For batches with extra items or multi-input models (e.g. baseline3's
+    ``(crops, person_labels, group_labels, masks)`` with
+    ``GroupActivityModel.forward(crops, masks)``), pass a ``batch_unpack``
+    callable that returns ``(model_inputs_tuple, target_tensor)``.
     """
-    y_true: list[int] = []
-    y_pred: list[int] = []
-    running_loss = 0.0
-
-    model.train()
-
-    pbar = tqdm(dataloader, desc="Training", unit="batch", dynamic_ncols=True, leave=True)
-
-    for data, target in pbar:
-        data, target = data.to(device), target.to(device)
-
-        optimizer.zero_grad()
-        output = model(data)
-        loss = criterion(output, target)
-        running_loss += loss.item()
-        loss.backward()
-        optimizer.step()
-
-        y_true.extend(target.cpu().numpy())
-        y_pred.extend(output.argmax(dim=1).cpu().numpy())
-
-    loss_epoch = running_loss / len(dataloader)
-    acc_epoch = float(accuracy_score(y_true, y_pred))
-    f1_epoch = float(f1_score(y_true, y_pred, average="macro"))
-    conf_mat = confusion_matrix(y_true, y_pred)
-
-    return loss_epoch, acc_epoch, f1_epoch, conf_mat
+    return _run_one_epoch(
+        model, dataloader, criterion, optimizer, device,
+        batch_unpack=batch_unpack, num_classes=num_classes, desc=desc,
+    )
 
 
 # ── Validation Loop ──────────────────────────────────────────────────────────
@@ -208,56 +310,16 @@ def validate_one_epoch(
     dataloader: DataLoader,
     criterion: nn.Module,
     device: torch.device,
+    *,
+    batch_unpack: BatchUnpack | None = None,
+    num_classes: int | None = None,
+    desc: str = "Validation",
 ) -> tuple[float, float, float, np.ndarray]:
-    """
-    Validate the model for a single epoch (no gradient computation).
-
-    Identical to :func:`train_one_epoch` except that the model is placed
-    in ``eval()`` mode and all forward passes run inside
-    ``torch.no_grad()``.
-
-    Parameters
-    ----------
-    model : nn.Module
-        The model to evaluate.
-    dataloader : DataLoader
-        Validation data loader.
-    criterion : nn.Module
-        Loss function.
-    device : torch.device
-        Target device.
-
-    Returns
-    -------
-    tuple[float, float, float, np.ndarray]
-        ``(loss, accuracy, f1_score, confusion_matrix)``.
-
-    """
-    y_true: list[int] = []
-    y_pred: list[int] = []
-    running_loss = 0.0
-
-    model.eval()
-
-    pbar = tqdm(dataloader, desc="Validation", unit="batch", dynamic_ncols=True, leave=True)
-
-    for data, target in pbar:
-        data, target = data.to(device), target.to(device)
-
-        with torch.no_grad():
-            output = model(data)
-            loss = criterion(output, target)
-            running_loss += loss.item()
-
-        y_true.extend(target.cpu().numpy())
-        y_pred.extend(output.argmax(dim=1).cpu().numpy())
-
-    loss_epoch = running_loss / len(dataloader)
-    acc_epoch = float(accuracy_score(y_true, y_pred))
-    f1_epoch = float(f1_score(y_true, y_pred, average="macro"))
-    conf_mat = confusion_matrix(y_true, y_pred)
-
-    return loss_epoch, acc_epoch, f1_epoch, conf_mat
+    """Validate (no gradients) for one epoch. Same kwargs as ``train_one_epoch``."""
+    return _run_one_epoch(
+        model, dataloader, criterion, None, device,
+        batch_unpack=batch_unpack, num_classes=num_classes, desc=desc,
+    )
 
 
 # ── Test Loop ────────────────────────────────────────────────────────────────
@@ -268,56 +330,16 @@ def test_one_epoch(
     dataloader: DataLoader,
     criterion: nn.Module,
     device: torch.device,
+    *,
+    batch_unpack: BatchUnpack | None = None,
+    num_classes: int | None = None,
+    desc: str = "Testing",
 ) -> tuple[float, float, float, np.ndarray]:
-    """
-    Evaluate the model on the test set.
-
-    Functionally identical to :func:`validate_one_epoch` but kept as a
-    separate function so callers can distinguish validation from final
-    test evaluation in logs and progress bars.
-
-    Parameters
-    ----------
-    model : nn.Module
-        The trained model to evaluate.
-    dataloader : DataLoader
-        Test data loader.
-    criterion : nn.Module
-        Loss function.
-    device : torch.device
-        Target device.
-
-    Returns
-    -------
-    tuple[float, float, float, np.ndarray]
-        ``(loss, accuracy, f1_score, confusion_matrix)``.
-
-    """
-    y_true: list[int] = []
-    y_pred: list[int] = []
-    running_loss = 0.0
-
-    model.eval()
-
-    pbar = tqdm(dataloader, desc="Testing", unit="batch", dynamic_ncols=True, leave=True)
-
-    for data, target in pbar:
-        data, target = data.to(device), target.to(device)
-
-        with torch.no_grad():
-            output = model(data)
-            loss = criterion(output, target)
-            running_loss += loss.item()
-
-        y_true.extend(target.cpu().numpy())
-        y_pred.extend(output.argmax(dim=1).cpu().numpy())
-
-    loss_epoch = running_loss / len(dataloader)
-    acc_epoch = float(accuracy_score(y_true, y_pred))
-    f1_epoch = float(f1_score(y_true, y_pred, average="macro"))
-    conf_mat = confusion_matrix(y_true, y_pred)
-
-    return loss_epoch, acc_epoch, f1_epoch, conf_mat
+    """Run a single evaluation pass on the test set. Same kwargs as ``train_one_epoch``."""
+    return _run_one_epoch(
+        model, dataloader, criterion, None, device,
+        batch_unpack=batch_unpack, num_classes=num_classes, desc=desc,
+    )
 
 
 # ── TensorBoard Experiment Summary ───────────────────────────────────────────
@@ -384,3 +406,101 @@ def log_experiment_summary(
 
     # ── HPARAMS tab (requires TensorFlow for full rendering) ─────────────
     writer.add_hparams(hparam_dict, metric_dict)
+
+
+# ── Class-Weight Helpers ─────────────────────────────────────────────────────
+#
+# Shared across baselines that need a class-balanced CrossEntropyLoss against
+# the volleyball dataset's heavy per-class skew (e.g. person actions dominated
+# by ``standing``, group activities with rare ``*_winpoint`` classes).
+#
+# The label-counting helpers take ``samples`` — VolleyballDataset.samples, the
+# in-memory list of ``(video_id, clip_id, clip_data)`` tuples — so no image
+# I/O happens. They replicate the loader's exact label-derivation logic so
+# counts match what training will actually see.
+
+
+def inverse_freq_weights(counts: torch.Tensor, num_classes: int) -> torch.Tensor:
+    """
+    Inverse-frequency CrossEntropyLoss weights: ``w_k = N / (K · n_k)``.
+
+    Mean weight is 1, so the overall loss magnitude is preserved while rare
+    classes get a proportionally larger gradient. Clamps to avoid div-by-zero
+    on absent classes.
+
+    Parameters
+    ----------
+    counts : torch.Tensor
+        Shape ``(num_classes,)``, integer per-class sample counts.
+    num_classes : int
+        K — the number of classes.
+
+    Returns
+    -------
+    torch.Tensor
+        Shape ``(num_classes,)`` float weights ready to pass as
+        ``nn.CrossEntropyLoss(weight=...)``.
+    """
+    total = counts.sum().clamp_min(1).float()
+    return total / (counts.float().clamp_min(1) * num_classes)
+
+
+def person_action_label_counts(samples, num_classes: int) -> torch.Tensor:
+    """
+    Count per-frame person-action labels across a list of dataset samples
+    (e.g. ``VolleyballDataset.samples``). Mirrors the loader's
+    tracking→actions fallback so counts match what training will actually see.
+
+    Parameters
+    ----------
+    samples : iterable of ``(video_id, clip_id, clip_data)`` tuples
+    num_classes : int
+        Should be ``NUM_PERSON_ACTIONS`` (9 for this dataset).
+
+    Returns
+    -------
+    torch.Tensor
+        Shape ``(num_classes,)`` integer counts.
+    """
+    from configs.labels import PERSON_ACTION_TO_IDX
+
+    counts = torch.zeros(num_classes, dtype=torch.long)
+    for _video_id, clip_id, clip_data in samples:
+        middle_name = f"{clip_id}.jpg"
+        persons = clip_data.get("tracking", {}).get(middle_name, [])
+        if not persons:
+            persons = clip_data.get("actions", {}).get(middle_name, [])
+        for p in persons:
+            action = p.get("action", "standing")
+            idx = PERSON_ACTION_TO_IDX.get(action, PERSON_ACTION_TO_IDX["standing"])
+            counts[idx] += 1
+    return counts
+
+
+def group_activity_label_counts(samples, num_classes: int) -> torch.Tensor:
+    """
+    Count per-clip group-activity labels across a list of dataset samples.
+    Mirrors the loader's exact mapping
+    ``GROUP_ACTIVITY_TO_IDX.get(scene_class, 0) if scene_class else 0`` —
+    so a clip with missing/None ``scene_class`` contributes to class 0 just
+    as it does in training.
+
+    Parameters
+    ----------
+    samples : iterable of ``(video_id, clip_id, clip_data)`` tuples
+    num_classes : int
+        Should be ``NUM_GROUP_ACTIVITIES`` (8 for this dataset).
+
+    Returns
+    -------
+    torch.Tensor
+        Shape ``(num_classes,)`` integer counts.
+    """
+    from configs.labels import GROUP_ACTIVITY_TO_IDX
+
+    counts = torch.zeros(num_classes, dtype=torch.long)
+    for _video_id, _clip_id, clip_data in samples:
+        scene_class = clip_data.get("scene_class")
+        idx = GROUP_ACTIVITY_TO_IDX.get(scene_class, 0) if scene_class else 0
+        counts[idx] += 1
+    return counts

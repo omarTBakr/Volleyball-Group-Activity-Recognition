@@ -2,7 +2,7 @@
 
 A deep learning pipeline for **group activity recognition** in volleyball videos, based on the [CVPR 2016 paper](https://www.cs.sfu.ca/~mori/research/papers/ibrahim-cvpr16.pdf) by Mostafa S. Ibrahim et al.
 
-The project implements a hierarchical data pipeline and a generic PyTorch data loader that supports **8 progressively complex baseline models** (B1–B8). **Baseline 1 is complete.**
+The project implements a hierarchical data pipeline and a generic PyTorch data loader that supports **8 progressively complex baseline models** (B1–B8). **Baselines 1 and 3 are complete.**
 
 ---
 
@@ -222,7 +222,7 @@ loader = DataLoader(dataset, batch_size=8, collate_fn=collate_fn)
 | Baseline | Status | Input | Temporal | Player-Level | Scene-Level |
 |----------|--------|-------|----------|--------------|-------------|
 | **B1** | ✅ Done | Middle frame (full) | ✗ | ✗ | Image classifier (8 classes) |
-| **B3** | 🔲 Pending | Middle frame (crops) | ✗ | Crop classifier (9 classes) | Max-pool features → NN (8 classes) |
+| **B3** | ✅ Done | Middle frame (crops) | ✗ | Crop classifier (9 classes) | Max+mean concat pool over players → MLP (8 classes) |
 | **B4** | 🔲 Pending | 9 frames (full) | LSTM on frame features | ✗ | LSTM → 8 classes |
 | **B5** | 🔲 Pending | 9 frames (crops) | LSTM per player | Max-pool players | NN (8 classes) |
 | **B6** | 🔲 Pending | 9 frames (crops) | LSTM on pooled frames | Max-pool per frame | LSTM → 8 classes |
@@ -265,6 +265,46 @@ Training uses a two-stage strategy: a linear probe (head-only) followed by full 
 
 ---
 
+### Baseline 3 — Per-Player Crops → Frozen Backbone → Concat-Pool → MLP
+
+A two-stage architecture. **Stage A** trains a ResNet-50 end-to-end on individual player crops to classify the 9 person actions (`blocking`, `digging`, …, `waiting`). **Stage B** freezes that backbone (with `fc = Identity`), passes the per-player crops of a clip through it to produce one `(P, 2048)` feature matrix per clip, applies concatenated max- and mean-pool across the player dimension to get a `(2 × 2048)`-wide vector, and trains a small MLP head to predict the 8 group activities.
+
+The concat pool gives the head two complementary signals: max captures *"is any player exhibiting feature k strongly?"* and mean captures *"what's the typical team level of feature k?"*. Class-weighted CrossEntropy is used in both stages to counter the heavy `standing` skew in Stage A (~70% of all crops) and the rare `l/r_winpoint` classes (~2.5× rarer than `spike/pass/set`) in Stage B.
+
+| Hyperparameter | Value |
+|---|---|
+| Backbone | ResNet-50 (pretrained) — `cfg.model.name` switchable to `resnet101` |
+| Stage A (person-action) | up to 100 epochs, lr = 1e-3, full backbone, class-weighted CE |
+| Stage B (group-activity head) | up to 100 epochs, lr = 1e-3, frozen backbone, MLP head |
+| Stage B pool | `concat` (max + mean), classifier in = 2 × 2048 |
+| MLP head | `Linear(4096, 512) → ReLU → Dropout(0.4) → Linear(512, 8)` |
+| Optimizer | SGD, momentum 0.9, Nesterov, weight decay 5e-4 |
+| LR Scheduler (Stage B) | CosineAnnealingLR |
+| Label Smoothing | 0.01 |
+| Class-weighted loss | inverse-frequency (`w_k = N / (K · n_k)`), both stages |
+| Multi-GPU | `nn.DataParallel` when `n_gpus > 1` (Kaggle dual-T4 ready) |
+| Early Stopping Patience | Stage A 25, Stage B 25 |
+
+#### Test Metrics (run2 — preliminary, pre-class-weighted-loss baseline)
+
+| Metric | Value |
+|--------|-------|
+| Accuracy | 21.6% |
+| Macro F1 | .178 |
+| Loss | 2.00 |
+
+The `run2` numbers above were produced with the legacy max-only pool and no class weighting, before the architectural fixes for per-video memorization and the standing-majority bias landed. The current code (concat pool + class-weighted CE in both stages) has not been retrained yet; expect a meaningful gain on rare-class recall once it is.
+
+#### Baseline 3 — Crop-based Two-Stage Classifier
+
+| Confusion Matrix | Classification Report |
+|:---:|:---:|
+| ![Confusion Matrix](plots/baseline3/Confusion%20Matrix.png) | ![Classification Report](plots/baseline3/Classification%20Report.png) |
+| **Precision-Recall Curves** | **mAP & F1 per Class** |
+| ![Precision-Recall Curves](plots/baseline3/Precision-Recall%20Curves.png) | ![mAP & F1](plots/baseline3/mAP%20%26%20F1%20Score%20per%20Class.png) |
+
+---
+
 ## Project Structure
 
 ```
@@ -292,7 +332,7 @@ Project1/
 │
 ├── models/
 │   ├── baseline1.py             # B1: Two-stage fine-tuned ResNet50 (✅ done)
-│   └── baseline3.py             # B3: Crop-based classifier (pending)
+│   └── baseline3.py             # B3: Person-then-group crop classifier (✅ done)
 │
 ├── utils/
 │   ├── utility.py               # Training/eval loop helpers
@@ -350,19 +390,31 @@ python -m src.data.data_loader
 
 ```bash
 python -m models.baseline1   # B1: Two-stage fine-tuned ResNet50
-python -m models.baseline3   # B3: Crop-based classifier (pending)
+python -m models.baseline3   # B3: Person-then-group crop classifier
 ```
 
 ### 5. Evaluate a Baseline
 
 ```bash
 uv run python -m utils.evaluate --model baseline1_run1.pt --baseline baseline1
+uv run python -m utils.evaluate --model baseline3_stage_b_run2.pt --baseline baseline3
 ```
 
-This generates all evaluation plots (confusion matrix, classification report, PR curves, mAP) under `plots/baseline1/`.
+This generates all evaluation plots (confusion matrix, classification report, PR curves, mAP) under `plots/<baseline>/`. The Baseline 3 evaluator auto-detects the saved pool mode (`max` vs `concat`) from the checkpoint's classifier shape, so old `run<2` checkpoints load without YAML edits.
 
 ---
 
 ## Video Sample
 
-[output video](output.mp4)
+GitHub's Markdown renderer does not embed `.mp4` files linked with `[link](file.mp4)` — the file shows as a text link only. The thumbnail below is a frame from the sample clip; click it to open the full video in GitHub's player.
+
+[![Sample clip — click to play](reports/figures/output_thumbnail.jpg)](output.mp4)
+
+<!--
+For auto-embed (in-page playback), drag-and-drop the `output.mp4` into a GitHub
+issue or PR — that uploads it to GitHub's CDN and produces a
+`https://github.com/<user>/<repo>/assets/.../output.mp4` URL that renders as a
+real <video> player when pasted into the README. Then swap the two lines above
+for that single URL on its own line.
+-->
+

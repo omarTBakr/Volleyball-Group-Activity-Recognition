@@ -27,7 +27,11 @@ from torch import nn
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
-from configs.labels import IDX_TO_GROUP_ACTIVITY, NUM_GROUP_ACTIVITIES
+from configs.labels import (
+    IDX_TO_GROUP_ACTIVITY,
+    NUM_GROUP_ACTIVITIES,
+    NUM_PERSON_ACTIONS,
+)
 from configs.path_config import BASE_DIR
 from src.data.kaggle_data_loader import VolleyballDataset, collate_fn
 from utils.load_model_config import build_transforms
@@ -38,6 +42,14 @@ from utils.plotting import (
     plot_precision_recall_auc,
 )
 from utils.utility import get_device, load_model
+
+# Per-baseline batch_unpack callables follow the same contract as
+# utils.utility.BatchUnpack: ``batch → (model_inputs_tuple, target_tensor)`` or
+# ``None`` to skip a batch. Defining the type alias here so any future baseline
+# can register without circular imports.
+from collections.abc import Callable
+
+BatchUnpack = Callable[[Any], tuple[tuple[torch.Tensor, ...], torch.Tensor] | None]
 
 # ── Constants ────────────────────────────────────────────────────────────────
 
@@ -51,10 +63,73 @@ CLASS_NAMES: list[str] = [
 # ═════════════════════════════════════════════════════════════════════════════
 
 
+def _detect_stage_b_pool(feature_dim: int, cfg: DictConfig) -> str:
+    """Infer the right GroupActivityModel pool mode for a saved checkpoint.
+
+    Old (pre-concat-pool) checkpoints have a classifier first-layer Linear of
+    shape ``(hidden_dim, feature_dim)``; new ones have
+    ``(hidden_dim, 2 * feature_dim)``. ``_build_model`` calls this *after* the
+    state_dict has been read at the call site (see ``_load_checkpoint``), but
+    that wouldn't work — we'd have to build the model before loading. So we
+    open the checkpoint here, peek at the saved shape, and decide.
+
+    Falls back to ``cfg.stage_b.pool`` (or ``"concat"``) when the checkpoint
+    can't be found yet — that path is hit only for callers that pre-build a
+    model with no checkpoint context, which evaluate.py doesn't do.
+
+    Returns
+    -------
+    str
+        ``"max"`` (legacy single-pool), or whatever ``cfg.stage_b.pool``
+        specifies (``"max"`` / ``"mean"`` / ``"concat"``).
+    """
+    fname = _PENDING_STAGE_B_CKPT.get("filename")
+    fallback = cfg.stage_b.get("pool", "concat")
+    if fname is None:
+        return fallback
+
+    from configs.path_config import MODEL_SAVE_DIR
+
+    try:
+        ckpt = torch.load(MODEL_SAVE_DIR / fname, map_location="cpu", weights_only=False)
+        saved_in = ckpt["model_state_dict"]["classifier.0.weight"].shape[1]
+    except (FileNotFoundError, KeyError):
+        return fallback
+
+    if saved_in == feature_dim:
+        # Legacy single-pool checkpoint (max-only was the default at save time).
+        print(
+            f"  ⓘ Detected legacy single-pool Stage B checkpoint "
+            f"(classifier_in={saved_in} = feature_dim). Using pool='max'."
+        )
+        return "max"
+    if saved_in == 2 * feature_dim:
+        print(
+            f"  ⓘ Detected concat-pool Stage B checkpoint "
+            f"(classifier_in={saved_in} = 2·feature_dim). Using pool='concat'."
+        )
+        return "concat"
+
+    # Unknown shape — fall back to YAML and let load_state_dict surface a clear error.
+    print(
+        f"  ⚠ Unexpected classifier_in={saved_in} for feature_dim={feature_dim}; "
+        f"falling back to cfg.stage_b.pool='{fallback}'."
+    )
+    return fallback
+
+
+# Module-global passing the in-flight checkpoint filename to the model builder
+# without changing the public _build_model signature. Set inside `evaluate()`
+# just before _build_model is called; consulted by _detect_stage_b_pool.
+_PENDING_STAGE_B_CKPT: dict[str, str | None] = {"filename": None}
+
+
 def _build_model(baseline_name: str, cfg: DictConfig) -> nn.Module:
     """Instantiate the correct model architecture for *baseline_name*.
 
     This function is the single place to extend when adding new baselines.
+    The model is returned uninitialized — ``_load_checkpoint`` will restore
+    the trained weights from the saved state_dict.
     """
     if baseline_name == "baseline1":
         from models.baseline1 import Model as Baseline1Model
@@ -66,9 +141,32 @@ def _build_model(baseline_name: str, cfg: DictConfig) -> nn.Module:
         )
 
     if baseline_name == "baseline3":
-        from models.baseline3 import build_model as build_baseline3
+        # baseline3 evaluates the Stage B group-activity model. It's a
+        # GroupActivityModel that wraps a PersonActionResNet whose fc is
+        # replaced by Identity at construction. The saved Stage B checkpoint
+        # restores both the backbone weights and the MLP classifier head.
+        #
+        # We honor cfg.stage_b.pool by default, but old checkpoints saved
+        # before the concat-pool change have a Linear(feature_dim, …) head
+        # rather than Linear(2·feature_dim, …). We peek at the saved
+        # classifier.0.weight shape and force pool="max" when it matches the
+        # legacy shape — that's the only post-concat pool layout with the
+        # same input dim as the legacy max-only head.
+        from models.baseline3 import GroupActivityModel, PersonActionResNet
 
-        return build_baseline3(cfg, num_classes=NUM_GROUP_ACTIVITIES)
+        person = PersonActionResNet(
+            num_classes=NUM_PERSON_ACTIONS,
+            backbone_name=cfg.model.name,
+            pretrained=False,
+        )
+        pool = _detect_stage_b_pool(person.feature_dim, cfg)
+        return GroupActivityModel(
+            person_model=person,
+            num_classes=NUM_GROUP_ACTIVITIES,
+            hidden_dim=cfg.stage_b.hidden_dim,
+            dropout=cfg.stage_b.get("dropout", 0.4),
+            pool=pool,
+        )
 
     raise ValueError(
         f"Evaluation not implemented for baseline: '{baseline_name}'"
@@ -81,11 +179,34 @@ def _dataset_kwargs_for(baseline_name: str) -> dict[str, Any]:
         return {"full_image": True, "n_frames": 1}
 
     if baseline_name == "baseline3":
-        return {"crop": True, "full_image": False}
+        return {"full_image": False, "crop": True, "n_frames": 1}
 
     raise ValueError(
         f"Dataset config not defined for baseline: '{baseline_name}'"
     )
+
+
+def _batch_unpack_for(baseline_name: str) -> BatchUnpack:
+    """Return the batch_unpack callable wired to *baseline_name*'s forward signature.
+
+    Backward-compat default (anything not registered here): assume the legacy
+    ``(data, target)`` 2-tuple batch contract with single-input
+    ``model(data)`` — matches baseline1.
+    """
+    if baseline_name == "baseline3":
+        # Reuse Stage B's exact unpacker — same contract as training time, so
+        # the model sees identical inputs and there's no chance of drift.
+        from models.baseline3 import stage_b_unpack
+
+        return stage_b_unpack
+
+    # Default: legacy 2-tuple ``(data, target)`` → ``model(data)``.
+    def _default(batch):
+        if not batch or len(batch) < 2:
+            return None
+        return (batch[0],), batch[1]
+
+    return _default
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -144,23 +265,39 @@ def _load_checkpoint(
 # ═════════════════════════════════════════════════════════════════════════════
 
 
-def _unpack_batch(batch: tuple) -> tuple[torch.Tensor, torch.Tensor]:
-    """Extract (data, target) from a batch regardless of collate format.
-
-    Full-image mode returns ``(images, labels)`` while crop mode returns
-    ``(crops, person_labels, group_labels, masks)``.
-    """
-    if len(batch) == 2:
-        return batch[0], batch[1]
-    if len(batch) == 4:
-        return batch[0], batch[2]  # crops, group_labels
-    raise ValueError(f"Unexpected batch format (len={len(batch)})")
-
-
 def _run_inference(
-    model: nn.Module, loader: DataLoader, device: torch.device
+    model: nn.Module,
+    loader: DataLoader,
+    device: torch.device,
+    *,
+    batch_unpack: BatchUnpack | None = None,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """Run inference and return ``(y_true, y_pred, y_score)``."""
+    """Run inference and return ``(y_true, y_pred, y_score)``.
+
+    Parameters
+    ----------
+    model, loader, device
+        Standard PyTorch inference setup.
+    batch_unpack : BatchUnpack, optional
+        Callable mapping a raw batch to ``(model_inputs_tuple, target)``.
+        When ``None`` (default), falls back to the legacy 2-tuple contract
+        ``(data, target)`` → ``model(data)`` — same behavior as the previous
+        ``_unpack_batch`` for ``len(batch) == 2``. Crop-mode baselines must
+        pass an unpacker that surfaces the mask alongside ``crops``.
+
+    Returns
+    -------
+    (y_true, y_pred, y_score)
+        Arrays of shape (N,), (N,), and (N, num_classes) respectively.
+        ``y_score`` is the softmax over output logits, used by the PR-AUC
+        and mAP plots.
+    """
+    if batch_unpack is None:
+        def batch_unpack(b):
+            if not b or len(b) < 2:
+                return None
+            return (b[0],), b[1]
+
     y_true_all: list[int] = []
     y_pred_all: list[int] = []
     y_score_all: list[np.ndarray] = []
@@ -168,10 +305,20 @@ def _run_inference(
     print(f"\nEvaluating on {device} ...")
     with torch.no_grad():
         for batch in tqdm(loader, desc="Testing"):
-            data, target = _unpack_batch(batch)
-            data = data.to(device)
+            if not batch:
+                continue
+            unpacked = batch_unpack(batch)
+            if unpacked is None:
+                continue
+            inputs, target = unpacked
+            if not isinstance(inputs, tuple):
+                inputs = (inputs,)
+            if target.numel() == 0:
+                continue
 
-            output = model(data)
+            inputs = tuple(t.to(device) for t in inputs)
+
+            output = model(*inputs)
             probs = F.softmax(output, dim=1)
             preds = output.argmax(dim=1)
 
@@ -240,13 +387,24 @@ def evaluate(model_filename: str, baseline_name: str) -> None:
         cfg = compose(config_name=baseline_name)
 
     # ── Pipeline ──────────────────────────────────────────────────────
-    model = _build_model(baseline_name, cfg)
+    # Surface the checkpoint name to the builder so baseline3 can auto-detect
+    # the right pool mode from the saved classifier shape (backward-compat
+    # with checkpoints saved before the concat-pool change).
+    _PENDING_STAGE_B_CKPT["filename"] = model_filename
+    try:
+        model = _build_model(baseline_name, cfg)
+    finally:
+        _PENDING_STAGE_B_CKPT["filename"] = None
+
     dataset_kwargs = _dataset_kwargs_for(baseline_name)
+    batch_unpack = _batch_unpack_for(baseline_name)
     test_loader = _build_test_loader(cfg, dataset_kwargs)
 
     model = _load_checkpoint(model, model_filename, device)
 
-    y_true, y_pred, y_score = _run_inference(model, test_loader, device)
+    y_true, y_pred, y_score = _run_inference(
+        model, test_loader, device, batch_unpack=batch_unpack,
+    )
 
     _generate_plots(y_true, y_pred, y_score, CLASS_NAMES, baseline_name)
 

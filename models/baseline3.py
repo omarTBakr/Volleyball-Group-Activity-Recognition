@@ -33,12 +33,10 @@ import json
 import hydra
 import torch
 from omegaconf import DictConfig
-from sklearn.metrics import accuracy_score, f1_score
 from torch import nn, optim
 from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
 from torchvision import models
-from tqdm import tqdm
 
 from configs.labels import (
     GROUP_ACTIVITY_TO_IDX,
@@ -49,7 +47,18 @@ from configs.labels import (
 from configs.path_config import LOGS_DIR
 from src.data.kaggle_data_loader import VolleyballDataset, collate_fn
 from utils.load_model_config import build_scheduler, build_transforms
-from utils.utility import get_device, load_model, log_experiment_summary, save_model
+from utils.utility import (
+    get_device,
+    group_activity_label_counts,
+    inverse_freq_weights,
+    load_model,
+    log_experiment_summary,
+    person_action_label_counts,
+    save_model,
+    test_one_epoch,
+    train_one_epoch,
+    validate_one_epoch,
+)
 
 # ═════════════════════════════════════════════════════════════════════════════
 # ══ 1. MODEL CLASSES ══
@@ -57,12 +66,32 @@ from utils.utility import get_device, load_model, log_experiment_summary, save_m
 
 
 class PersonActionResNet(nn.Module):
-    """ResNet-50 → 9-class person-action classifier (Stage A)."""
+    """ResNet → 9-class person-action classifier (Stage A).
 
-    def __init__(self, num_classes: int = NUM_PERSON_ACTIONS, pretrained: bool = True) -> None:
+    Backbone is selectable via ``backbone_name`` (``"resnet50"`` or
+    ``"resnet101"``). Wired up from ``cfg.model.name`` in the YAML.
+    """
+
+    def __init__(
+        self,
+        num_classes: int = NUM_PERSON_ACTIONS,
+        backbone_name: str = "resnet50",
+        pretrained: bool = True,
+    ) -> None:
         super().__init__()
-        weights = models.ResNet50_Weights.DEFAULT if pretrained else None
-        self.backbone = models.resnet50(weights=weights)
+
+        if backbone_name == "resnet50":
+            weights = models.ResNet50_Weights.DEFAULT if pretrained else None
+            self.backbone = models.resnet50(weights=weights)
+        elif backbone_name == "resnet101":
+            weights = models.ResNet101_Weights.DEFAULT if pretrained else None
+            self.backbone = models.resnet101(weights=weights)
+        else:
+            raise ValueError(
+                f"Unsupported backbone '{backbone_name}'. "
+                "Use 'resnet50' or 'resnet101'."
+            )
+
         self.feature_dim = self.backbone.fc.in_features
         self.backbone.fc = nn.Linear(self.feature_dim, num_classes)
 
@@ -72,27 +101,33 @@ class PersonActionResNet(nn.Module):
 
 class GroupActivityModel(nn.Module):
     """
-    Stage B: frozen ResNet feature extractor → [max-pool ⨁ mean-pool] across
-    players → MLP → 8-class.
+    Stage B: frozen ResNet feature extractor → pool across players → MLP → 8-class.
 
-    Concatenating max and mean pool over the player dimension gives the
-    classifier two complementary signals:
-      - max-pool: "is some player exhibiting feature k strongly?"
-      - mean-pool: "what is the typical level of feature k across the team?"
-    The classifier then receives a 2D-wide vector (D = feature_dim).
+    The aggregation across the player dimension is selectable:
+      - ``pool="max"``    → classifier input is ``feature_dim``. (Legacy.)
+      - ``pool="mean"``   → classifier input is ``feature_dim``.
+      - ``pool="concat"`` → classifier input is ``2 * feature_dim``. Max captures
+        "is some player exhibiting feature k strongly?", mean captures "what's
+        the typical team level of feature k?" — together they encode both
+        signals.
 
     Parameters
     ----------
     person_model : PersonActionResNet
         Already-trained Stage A model. Its fc is replaced with ``Identity`` so the
-        backbone returns the 2048-dim feature vector before classification.
+        backbone returns the feature_dim-wide vector before classification.
     num_classes : int
         Number of group-activity classes (8).
     hidden_dim : int
         Width of the MLP hidden layer.
     dropout : float
         Dropout applied inside the MLP head.
+    pool : {"max", "mean", "concat"}
+        Player-dim aggregation. Default ``"concat"``. Pass ``"max"`` to match
+        checkpoints saved before the concat-pool change.
     """
+
+    _VALID_POOLS = ("max", "mean", "concat")
 
     def __init__(
         self,
@@ -100,20 +135,27 @@ class GroupActivityModel(nn.Module):
         num_classes: int = NUM_GROUP_ACTIVITIES,
         hidden_dim: int = 512,
         dropout: float = 0.4,
+        pool: str = "concat",
     ) -> None:
         super().__init__()
 
+        if pool not in self._VALID_POOLS:
+            raise ValueError(
+                f"Unsupported pool '{pool}'. Use one of {self._VALID_POOLS}."
+            )
+        self.pool = pool
+
         self.feature_dim = person_model.feature_dim
         self.backbone = person_model.backbone
-        self.backbone.fc = nn.Identity()  # output 2048-dim feature per crop
+        self.backbone.fc = nn.Identity()  # output feature_dim-wide vector per crop
 
         # Freeze the entire ResNet — only the MLP head trains in Stage B.
         for p in self.backbone.parameters():
             p.requires_grad = False
 
-        # Pooled vector is [max | mean] → 2 * feature_dim wide.
+        classifier_in = 2 * self.feature_dim if pool == "concat" else self.feature_dim
         self.classifier = nn.Sequential(
-            nn.Linear(2 * self.feature_dim, hidden_dim),
+            nn.Linear(classifier_in, hidden_dim),
             nn.ReLU(inplace=True),
             nn.Dropout(p=dropout),
             nn.Linear(hidden_dim, num_classes),
@@ -137,189 +179,86 @@ class GroupActivityModel(nn.Module):
 
         mask_3d = masks.unsqueeze(-1).expand_as(feats)
 
-        # ── Max pool: drive padded slots to -inf so they cannot win the max.
-        feats_for_max = feats.masked_fill(~mask_3d, float("-inf"))
-        pooled_max, _ = feats_for_max.max(dim=1)  # (B, D)
-        # Clips with zero valid players → all -inf; sanitize to 0.
-        pooled_max = torch.where(
-            torch.isinf(pooled_max), torch.zeros_like(pooled_max), pooled_max,
-        )
+        if self.pool in ("max", "concat"):
+            # Max pool: drive padded slots to -inf so they cannot win the max.
+            feats_for_max = feats.masked_fill(~mask_3d, float("-inf"))
+            pooled_max, _ = feats_for_max.max(dim=1)  # (B, D)
+            # Clips with zero valid players → all -inf; sanitize to 0.
+            pooled_max = torch.where(
+                torch.isinf(pooled_max), torch.zeros_like(pooled_max), pooled_max,
+            )
 
-        # ── Mean pool: zero out padded slots, divide by valid count per clip.
-        feats_for_mean = feats.masked_fill(~mask_3d, 0.0)
-        valid_count = masks.sum(dim=1).clamp_min(1).unsqueeze(-1).float()  # (B, 1)
-        pooled_mean = feats_for_mean.sum(dim=1) / valid_count  # (B, D)
+        if self.pool in ("mean", "concat"):
+            # Mean pool: zero out padded slots, divide by valid count per clip.
+            feats_for_mean = feats.masked_fill(~mask_3d, 0.0)
+            valid_count = masks.sum(dim=1).clamp_min(1).unsqueeze(-1).float()  # (B, 1)
+            pooled_mean = feats_for_mean.sum(dim=1) / valid_count  # (B, D)
 
-        pooled = torch.cat([pooled_max, pooled_mean], dim=-1)  # (B, 2D)
+        if self.pool == "max":
+            pooled = pooled_max
+        elif self.pool == "mean":
+            pooled = pooled_mean
+        else:  # "concat"
+            pooled = torch.cat([pooled_max, pooled_mean], dim=-1)  # (B, 2D)
+
         return self.classifier(pooled)
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# ══ 2. PER-EPOCH ROUTINES ══
+# ══ 2. BATCH UNPACKERS (plug into utils.utility.train/validate/test_one_epoch) ══
 # ═════════════════════════════════════════════════════════════════════════════
 #
-# train_one_epoch / validate_one_epoch in utils.utility only unpack 2-tuple
-# batches (image, label). Crop-mode collate returns a 4-tuple
-# (crops, person_labels, group_labels, masks), so each stage gets its own
-# tight loop here.
+# The shared epoch driver in utils.utility expects each batch to be reduced to
+# ``(model_inputs_tuple, target_tensor)`` — the unpacker is the only per-task
+# code needed to use it. Crop-mode collate returns a 4-tuple
+# ``(crops, person_labels, group_labels, masks)``; each stage of baseline3
+# (and other crop-mode baselines) needs its own one-liner unpacker.
 
 
-def _batch_is_empty(crops: torch.Tensor) -> bool:
+def _crop_batch_invalid(crops: torch.Tensor) -> bool:
     """Crop-mode collate returns torch.empty(0) when the whole batch has no players."""
     return crops.dim() < 5 or crops.numel() == 0
 
 
-def _epoch_stage_a(
-    model: PersonActionResNet,
-    loader: DataLoader,
-    criterion: nn.Module,
-    optimizer: optim.Optimizer | None,
-    device: torch.device,
-    desc: str,
-) -> tuple[float, float, float]:
-    """Per-player classification: forward each valid crop, optimize when optimizer given."""
-    is_train = optimizer is not None
-    model.train(is_train)
-
-    y_true: list[int] = []
-    y_pred: list[int] = []
-    running_loss = 0.0
-    n_steps = 0
-
-    pbar = tqdm(loader, desc=desc, unit="batch", dynamic_ncols=True, leave=True)
-    for batch in pbar:
-        if not batch:
-            continue
-        crops, person_labels, _group_labels, masks = batch
-        if _batch_is_empty(crops):
-            continue
-
-        B, P, C, H, W = crops.shape
-        crops_flat = crops.view(B * P, C, H, W).to(device, non_blocking=True)
-        labels_flat = person_labels.view(B * P).to(device, non_blocking=True)
-        mask_flat = masks.view(B * P).to(device, non_blocking=True)
-
-        valid = mask_flat.nonzero(as_tuple=True)[0]
-        if valid.numel() == 0:
-            continue
-
-        valid_crops = crops_flat[valid]
-        valid_labels = labels_flat[valid]
-
-        with torch.set_grad_enabled(is_train):
-            logits = model(valid_crops)
-            loss = criterion(logits, valid_labels)
-
-        if is_train:
-            optimizer.zero_grad()
-            loss.backward()
-            optimizer.step()
-
-        running_loss += loss.item()
-        n_steps += 1
-
-        y_true.extend(valid_labels.detach().cpu().tolist())
-        y_pred.extend(logits.argmax(dim=1).detach().cpu().tolist())
-
-    avg_loss = running_loss / max(n_steps, 1)
-    acc = float(accuracy_score(y_true, y_pred)) if y_true else 0.0
-    f1 = float(f1_score(y_true, y_pred, average="macro", zero_division=0)) if y_true else 0.0
-    return avg_loss, acc, f1
-
-
-def _epoch_stage_b(
-    model: GroupActivityModel,
-    loader: DataLoader,
-    criterion: nn.Module,
-    optimizer: optim.Optimizer | None,
-    device: torch.device,
-    desc: str,
-) -> tuple[float, float, float]:
-    """Clip-level classification: pooled-feature → MLP → 8-class."""
-    is_train = optimizer is not None
-    model.train(is_train)
-
-    y_true: list[int] = []
-    y_pred: list[int] = []
-    running_loss = 0.0
-    n_steps = 0
-
-    pbar = tqdm(loader, desc=desc, unit="batch", dynamic_ncols=True, leave=True)
-    for batch in pbar:
-        if not batch:
-            continue
-        crops, _person_labels, group_labels, masks = batch
-        if _batch_is_empty(crops):
-            continue
-
-        crops = crops.to(device, non_blocking=True)
-        masks = masks.to(device, non_blocking=True)
-        group_labels = group_labels.to(device, non_blocking=True)
-
-        with torch.set_grad_enabled(is_train):
-            logits = model(crops, masks)
-            loss = criterion(logits, group_labels)
-
-        if is_train:
-            optimizer.zero_grad()
-            loss.backward()
-            optimizer.step()
-
-        running_loss += loss.item()
-        n_steps += 1
-
-        y_true.extend(group_labels.detach().cpu().tolist())
-        y_pred.extend(logits.argmax(dim=1).detach().cpu().tolist())
-
-    avg_loss = running_loss / max(n_steps, 1)
-    acc = float(accuracy_score(y_true, y_pred)) if y_true else 0.0
-    f1 = float(f1_score(y_true, y_pred, average="macro", zero_division=0)) if y_true else 0.0
-    return avg_loss, acc, f1
-
-
-# ═════════════════════════════════════════════════════════════════════════════
-# ══ 3. CLASS-WEIGHT COMPUTATION (Stage A) ══
-# ═════════════════════════════════════════════════════════════════════════════
-
-
-def _person_action_class_weights(
-    train_dataset: VolleyballDataset,
-    num_classes: int = NUM_PERSON_ACTIONS,
-    scheme: str = "inv_freq",
-) -> tuple[torch.Tensor, torch.Tensor]:
+def stage_a_unpack(batch):
     """
-    Compute class weights for the person-action loss by scanning the training
-    dataset's clip metadata. No image I/O — we read action labels from the
-    in-memory ``samples`` list, mirroring the loader's tracking→actions
-    fallback so the counts match what training will actually see.
-
-    Returns
-    -------
-    (weights, counts) : tuple[torch.Tensor, torch.Tensor]
-        Both shape (num_classes,). ``weights`` is float CE weights;
-        ``counts`` is the raw label distribution (for logging).
+    Person-action unpacker: flatten (B, P) → (B*P,), drop padded slots via
+    the mask, and emit ``((valid_crops,), valid_labels)`` for the standard
+    single-input PersonActionResNet forward.
     """
-    counts = torch.zeros(num_classes, dtype=torch.long)
-    for video_id, clip_id, clip_data in train_dataset.samples:
-        # Match the loader's _get_persons_for_frame fallback: tracking first,
-        # then per-frame action detections.
-        middle_name = f"{clip_id}.jpg"
-        persons = clip_data.get("tracking", {}).get(middle_name, [])
-        if not persons:
-            persons = clip_data.get("actions", {}).get(middle_name, [])
-        for p in persons:
-            action = p.get("action", "standing")
-            idx = PERSON_ACTION_TO_IDX.get(action, PERSON_ACTION_TO_IDX["standing"])
-            counts[idx] += 1
+    if not batch:
+        return None
+    crops, person_labels, _group_labels, masks = batch
+    if _crop_batch_invalid(crops):
+        return None
 
-    if scheme == "inv_freq":
-        # w_k = total / (K · n_k); clamp to avoid div-by-zero on absent classes.
-        total = counts.sum().clamp_min(1).float()
-        weights = total / (counts.float().clamp_min(1) * num_classes)
-    else:
-        raise ValueError(f"Unknown class-weight scheme: {scheme}")
+    B, P, C, H, W = crops.shape
+    flat = crops.view(B * P, C, H, W)
+    labels = person_labels.view(B * P)
+    mask = masks.view(B * P)
 
-    return weights, counts
+    valid = mask.nonzero(as_tuple=True)[0]
+    if valid.numel() == 0:
+        return None
+    return (flat[valid],), labels[valid]
+
+
+def stage_b_unpack(batch):
+    """
+    Group-activity unpacker: keep ``crops`` and ``masks`` together as the
+    multi-arg input to GroupActivityModel.forward(crops, masks), targets are
+    the per-clip group labels.
+    """
+    if not batch:
+        return None
+    crops, _person_labels, group_labels, masks = batch
+    if _crop_batch_invalid(crops):
+        return None
+    return (crops, masks), group_labels
+
+
+# Class-weight helpers (inverse_freq_weights, person_action_label_counts,
+# group_activity_label_counts) now live in utils.utility — see imports above.
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -377,6 +316,7 @@ def train_test(cfg: DictConfig) -> None:
 
     person_model = PersonActionResNet(
         num_classes=NUM_PERSON_ACTIONS,
+        backbone_name=cfg.model.name,
         pretrained=cfg.model.get("pretrained", True),
     ).to(device)
 
@@ -398,7 +338,8 @@ def train_test(cfg: DictConfig) -> None:
     # carry signal for Stage B's group classification.
     use_class_weights = stage_a_cfg.get("class_weighted_loss", True)
     if use_class_weights:
-        cw, counts = _person_action_class_weights(train_dataset, NUM_PERSON_ACTIONS)
+        counts = person_action_label_counts(train_dataset.samples, NUM_PERSON_ACTIONS)
+        cw = inverse_freq_weights(counts, NUM_PERSON_ACTIONS)
         idx_to_name = {v: k for k, v in PERSON_ACTION_TO_IDX.items()}
         print("  Per-class person-action stats (count → weight):")
         for i in range(NUM_PERSON_ACTIONS):
@@ -427,11 +368,17 @@ def train_test(cfg: DictConfig) -> None:
         global_epoch += 1
         print(f"\n--- Stage A · Epoch {epoch + 1}/{stage_a_cfg.num_epochs} ---")
 
-        train_loss, train_acc, train_f1 = _epoch_stage_a(
-            person_model, train_loader, criterion_a, optimizer_a, device, "Train[A]",
+        train_loss, train_acc, train_f1, _ = train_one_epoch(
+            person_model, train_loader, criterion_a, optimizer_a, device,
+            batch_unpack=stage_a_unpack,
+            num_classes=NUM_PERSON_ACTIONS,
+            desc="Train[A]",
         )
-        val_loss, val_acc, val_f1 = _epoch_stage_a(
-            person_model, val_loader, criterion_a, None, device, "Val[A]",
+        val_loss, val_acc, val_f1, _ = validate_one_epoch(
+            person_model, val_loader, criterion_a, device,
+            batch_unpack=stage_a_unpack,
+            num_classes=NUM_PERSON_ACTIONS,
+            desc="Val[A]",
         )
 
         writer.add_scalar("StageA/Loss/train", train_loss, global_epoch)
@@ -474,7 +421,11 @@ def train_test(cfg: DictConfig) -> None:
 
     # Reload best Stage-A weights into a fresh (unwrapped) ResNet so we always start
     # B from the best person-action checkpoint, not the last epoch's.
-    reloaded = PersonActionResNet(num_classes=NUM_PERSON_ACTIONS, pretrained=False).to(device)
+    reloaded = PersonActionResNet(
+        num_classes=NUM_PERSON_ACTIONS,
+        backbone_name=cfg.model.name,
+        pretrained=False,
+    ).to(device)
     reloaded, _, _, _, _ = load_model(stage_a_ckpt, reloaded)
 
     group_model = GroupActivityModel(
@@ -482,6 +433,7 @@ def train_test(cfg: DictConfig) -> None:
         num_classes=NUM_GROUP_ACTIVITIES,
         hidden_dim=stage_b_cfg.hidden_dim,
         dropout=stage_b_cfg.get("dropout", 0.4),
+        pool=stage_b_cfg.get("pool", "concat"),
     ).to(device)
     group_inner = group_model
 
@@ -489,7 +441,26 @@ def train_test(cfg: DictConfig) -> None:
         print(f"  DataParallel across {n_gpus} GPUs")
         group_model = nn.DataParallel(group_model)
 
-    criterion_b = nn.CrossEntropyLoss(label_smoothing=cfg.get("label_smoothing", 0.0))
+    # Inverse-frequency class weights for the 8 group-activity classes.
+    # l/r_winpoint are about 2.5× rarer than the spike/pass/set classes in this
+    # split; without weighting the head learns to suppress winpoint predictions
+    # and the model's biggest confusion (l-* vs r-*) gets even worse on the
+    # minority side.
+    use_class_weights_b = stage_b_cfg.get("class_weighted_loss", True)
+    if use_class_weights_b:
+        counts_b = group_activity_label_counts(train_dataset.samples, NUM_GROUP_ACTIVITIES)
+        cw_b = inverse_freq_weights(counts_b, NUM_GROUP_ACTIVITIES)
+        idx_to_name = {v: k for k, v in GROUP_ACTIVITY_TO_IDX.items()}
+        print("  Per-class group-activity stats (count → weight):")
+        for i in range(NUM_GROUP_ACTIVITIES):
+            print(f"    {idx_to_name[i]:<12s}  n={int(counts_b[i]):>5d}  w={float(cw_b[i]):.3f}")
+        criterion_b = nn.CrossEntropyLoss(
+            weight=cw_b.to(device),
+            label_smoothing=cfg.get("label_smoothing", 0.0),
+        )
+    else:
+        criterion_b = nn.CrossEntropyLoss(label_smoothing=cfg.get("label_smoothing", 0.0))
+
     optimizer_b = optim.SGD(
         group_inner.classifier.parameters(),
         lr=stage_b_cfg.learning_rate,
@@ -507,11 +478,17 @@ def train_test(cfg: DictConfig) -> None:
         global_epoch += 1
         print(f"\n--- Stage B · Epoch {epoch + 1}/{stage_b_cfg.num_epochs} ---")
 
-        train_loss, train_acc, train_f1 = _epoch_stage_b(
-            group_model, train_loader, criterion_b, optimizer_b, device, "Train[B]",
+        train_loss, train_acc, train_f1, _ = train_one_epoch(
+            group_model, train_loader, criterion_b, optimizer_b, device,
+            batch_unpack=stage_b_unpack,
+            num_classes=NUM_GROUP_ACTIVITIES,
+            desc="Train[B]",
         )
-        val_loss, val_acc, val_f1 = _epoch_stage_b(
-            group_model, val_loader, criterion_b, None, device, "Val[B]",
+        val_loss, val_acc, val_f1, _ = validate_one_epoch(
+            group_model, val_loader, criterion_b, device,
+            batch_unpack=stage_b_unpack,
+            num_classes=NUM_GROUP_ACTIVITIES,
+            desc="Val[B]",
         )
 
         if scheduler_b:
@@ -553,19 +530,27 @@ def train_test(cfg: DictConfig) -> None:
 
     # ── Test best Stage-B model ──────────────────────────────────────────
     print("\n--- Testing best Stage-B model ---")
-    fresh_person = PersonActionResNet(num_classes=NUM_PERSON_ACTIONS, pretrained=False).to(device)
+    fresh_person = PersonActionResNet(
+        num_classes=NUM_PERSON_ACTIONS,
+        backbone_name=cfg.model.name,
+        pretrained=False,
+    ).to(device)
     best_group = GroupActivityModel(
         person_model=fresh_person,
         num_classes=NUM_GROUP_ACTIVITIES,
         hidden_dim=stage_b_cfg.hidden_dim,
         dropout=stage_b_cfg.get("dropout", 0.4),
+        pool=stage_b_cfg.get("pool", "concat"),
     ).to(device)
     best_group, _, _, _, _ = load_model(stage_b_ckpt, best_group)
     if use_dp:
         best_group = nn.DataParallel(best_group)
 
-    test_loss, test_acc, test_f1 = _epoch_stage_b(
-        best_group, test_loader, criterion_b, None, device, "Test[B]",
+    test_loss, test_acc, test_f1, _ = test_one_epoch(
+        best_group, test_loader, criterion_b, device,
+        batch_unpack=stage_b_unpack,
+        num_classes=NUM_GROUP_ACTIVITIES,
+        desc="Test[B]",
     )
     print(f"Final Test -> Loss: {test_loss:.4f}, Acc: {test_acc:.4f}, F1: {test_f1:.4f}")
 
