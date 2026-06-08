@@ -16,7 +16,7 @@ data_parallel: true
 # --- Stage A: Person-action pretraining (9 classes) ---
 # Full ResNet-50 trained end-to-end on per-player crops.
 stage_a:
-  num_epochs: 50
+  num_epochs: 100
   learning_rate: 1e-3           # SGD lr for the whole backbone
   weight_decay: 5e-4
   early_stopping_patience: 25
@@ -24,7 +24,7 @@ stage_a:
 # --- Stage B: Group-activity head fine-tune (8 classes) ---
 # Backbone is loaded from Stage A and frozen. Only the MLP head trains.
 stage_b:
-  num_epochs: 50
+  num_epochs: 100
   learning_rate: 1e-3           # SGD lr for the MLP head
   weight_decay: 5e-4
   hidden_dim: 512               # MLP hidden width: 2048 → hidden_dim → 8
