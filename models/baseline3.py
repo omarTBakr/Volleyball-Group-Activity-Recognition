@@ -72,7 +72,14 @@ class PersonActionResNet(nn.Module):
 
 class GroupActivityModel(nn.Module):
     """
-    Stage B: frozen ResNet feature extractor → max-pool across players → MLP → 8-class.
+    Stage B: frozen ResNet feature extractor → [max-pool ⨁ mean-pool] across
+    players → MLP → 8-class.
+
+    Concatenating max and mean pool over the player dimension gives the
+    classifier two complementary signals:
+      - max-pool: "is some player exhibiting feature k strongly?"
+      - mean-pool: "what is the typical level of feature k across the team?"
+    The classifier then receives a 2D-wide vector (D = feature_dim).
 
     Parameters
     ----------
@@ -104,8 +111,9 @@ class GroupActivityModel(nn.Module):
         for p in self.backbone.parameters():
             p.requires_grad = False
 
+        # Pooled vector is [max | mean] → 2 * feature_dim wide.
         self.classifier = nn.Sequential(
-            nn.Linear(self.feature_dim, hidden_dim),
+            nn.Linear(2 * self.feature_dim, hidden_dim),
             nn.ReLU(inplace=True),
             nn.Dropout(p=dropout),
             nn.Linear(hidden_dim, num_classes),
@@ -127,15 +135,22 @@ class GroupActivityModel(nn.Module):
         flat = crops.view(B * P, C, H, W)
         feats = self.backbone(flat).view(B, P, self.feature_dim)  # (B, P, D)
 
-        # Drive padded-player features to -inf so they can't win the max pool.
         mask_3d = masks.unsqueeze(-1).expand_as(feats)
-        feats = feats.masked_fill(~mask_3d, float("-inf"))
-        pooled, _ = feats.max(dim=1)  # (B, D)
 
-        # Clips with zero valid players → pooled is all -inf; sanitize to 0.
-        pooled = torch.where(
-            torch.isinf(pooled), torch.zeros_like(pooled), pooled,
+        # ── Max pool: drive padded slots to -inf so they cannot win the max.
+        feats_for_max = feats.masked_fill(~mask_3d, float("-inf"))
+        pooled_max, _ = feats_for_max.max(dim=1)  # (B, D)
+        # Clips with zero valid players → all -inf; sanitize to 0.
+        pooled_max = torch.where(
+            torch.isinf(pooled_max), torch.zeros_like(pooled_max), pooled_max,
         )
+
+        # ── Mean pool: zero out padded slots, divide by valid count per clip.
+        feats_for_mean = feats.masked_fill(~mask_3d, 0.0)
+        valid_count = masks.sum(dim=1).clamp_min(1).unsqueeze(-1).float()  # (B, 1)
+        pooled_mean = feats_for_mean.sum(dim=1) / valid_count  # (B, D)
+
+        pooled = torch.cat([pooled_max, pooled_mean], dim=-1)  # (B, 2D)
         return self.classifier(pooled)
 
 
@@ -263,7 +278,52 @@ def _epoch_stage_b(
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# ══ 3. MAIN ENTRYPOINT ══
+# ══ 3. CLASS-WEIGHT COMPUTATION (Stage A) ══
+# ═════════════════════════════════════════════════════════════════════════════
+
+
+def _person_action_class_weights(
+    train_dataset: VolleyballDataset,
+    num_classes: int = NUM_PERSON_ACTIONS,
+    scheme: str = "inv_freq",
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """
+    Compute class weights for the person-action loss by scanning the training
+    dataset's clip metadata. No image I/O — we read action labels from the
+    in-memory ``samples`` list, mirroring the loader's tracking→actions
+    fallback so the counts match what training will actually see.
+
+    Returns
+    -------
+    (weights, counts) : tuple[torch.Tensor, torch.Tensor]
+        Both shape (num_classes,). ``weights`` is float CE weights;
+        ``counts`` is the raw label distribution (for logging).
+    """
+    counts = torch.zeros(num_classes, dtype=torch.long)
+    for video_id, clip_id, clip_data in train_dataset.samples:
+        # Match the loader's _get_persons_for_frame fallback: tracking first,
+        # then per-frame action detections.
+        middle_name = f"{clip_id}.jpg"
+        persons = clip_data.get("tracking", {}).get(middle_name, [])
+        if not persons:
+            persons = clip_data.get("actions", {}).get(middle_name, [])
+        for p in persons:
+            action = p.get("action", "standing")
+            idx = PERSON_ACTION_TO_IDX.get(action, PERSON_ACTION_TO_IDX["standing"])
+            counts[idx] += 1
+
+    if scheme == "inv_freq":
+        # w_k = total / (K · n_k); clamp to avoid div-by-zero on absent classes.
+        total = counts.sum().clamp_min(1).float()
+        weights = total / (counts.float().clamp_min(1) * num_classes)
+    else:
+        raise ValueError(f"Unknown class-weight scheme: {scheme}")
+
+    return weights, counts
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# ══ 4. MAIN ENTRYPOINT ══
 # ═════════════════════════════════════════════════════════════════════════════
 
 
@@ -331,7 +391,25 @@ def train_test(cfg: DictConfig) -> None:
         print(f"  DataParallel across {n_gpus} GPUs (each sees batch_size/{n_gpus})")
         person_model = nn.DataParallel(person_model)
 
-    criterion_a = nn.CrossEntropyLoss(label_smoothing=cfg.get("label_smoothing", 0.0))
+    # Inverse-frequency class weights for the (heavily skewed) 9 person-action
+    # labels. Without this the backbone collapses to "always predict standing"
+    # for the first ~10 epochs and never recovers a useful representation of
+    # the minority actions (spiking/setting/passing) — exactly the actions that
+    # carry signal for Stage B's group classification.
+    use_class_weights = stage_a_cfg.get("class_weighted_loss", True)
+    if use_class_weights:
+        cw, counts = _person_action_class_weights(train_dataset, NUM_PERSON_ACTIONS)
+        idx_to_name = {v: k for k, v in PERSON_ACTION_TO_IDX.items()}
+        print("  Per-class person-action stats (count → weight):")
+        for i in range(NUM_PERSON_ACTIONS):
+            print(f"    {idx_to_name[i]:<10s}  n={int(counts[i]):>6d}  w={float(cw[i]):.3f}")
+        criterion_a = nn.CrossEntropyLoss(
+            weight=cw.to(device),
+            label_smoothing=cfg.get("label_smoothing", 0.0),
+        )
+    else:
+        criterion_a = nn.CrossEntropyLoss(label_smoothing=cfg.get("label_smoothing", 0.0))
+
     optimizer_a = optim.SGD(
         person_model.parameters(),
         lr=stage_a_cfg.learning_rate,

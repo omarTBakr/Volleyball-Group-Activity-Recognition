@@ -20,6 +20,10 @@ stage_a:
   learning_rate: 1e-3           # SGD lr for the whole backbone
   weight_decay: 5e-4
   early_stopping_patience: 25
+  # Inverse-frequency class weights in CE. Counters the "standing" majority
+  # bias so the backbone learns to separate spiking/setting/passing — the
+  # actions that actually carry signal for Stage B. Set false for plain CE.
+  class_weighted_loss: true
 
 # --- Stage B: Group-activity head fine-tune (8 classes) ---
 # Backbone is loaded from Stage A and frozen. Only the MLP head trains.
