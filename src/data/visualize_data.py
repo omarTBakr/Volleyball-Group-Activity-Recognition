@@ -324,5 +324,5 @@ def visualize_loader(
 
 
 if __name__ == "__main__":
-    # visualize_video_fully_annotated(n_clips=3)
-    visualize_loader(full_image=True, n_frames=1, batch_size=4, config_name="baseline1", mode="validation")
+    visualize_video_fully_annotated(n_clips=3)
+    # visualize_loader(full_image=True, n_frames=1, batch_size=4, config_name="baseline1", mode="validation")

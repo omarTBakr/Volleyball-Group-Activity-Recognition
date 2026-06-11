@@ -2,9 +2,9 @@
 
 A deep learning pipeline for **group activity recognition** in volleyball videos, based on the [CVPR 2016 paper](https://www.cs.sfu.ca/~mori/research/papers/ibrahim-cvpr16.pdf) by Mostafa S. Ibrahim et al.
 
-![Sample clip](reports/figures/output_sample.gif)
+![Sample clip](plots/videoAnnot.png)
 
-> The animated GIF above plays inline on github.com (no video player needed). The full-resolution H.264 MP4 is at [`output.mp4`](output.mp4) — click to view it in the GitHub blob viewer. For *true* inline `<video>` playback embedded in the README, drag-and-drop `output.mp4` into a GitHub issue/PR; GitHub will upload it to its attachment CDN and produce a `user-attachments.githubusercontent.com/...` URL that you can paste on its own line in place of the image above.
+The snapshot shows the output of `python -m src.data.visualize_data` with `video_fully_annotated=True`. 
 
 ---
 
