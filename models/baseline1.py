@@ -15,6 +15,13 @@ Class names and ``num_classes`` are sourced from
 
 from __future__ import annotations
 
+# Force a non-interactive matplotlib backend BEFORE any other import.
+# On Kaggle, MPLBACKEND is preset to "module://matplotlib_inline.backend_inline"
+# which the venv's matplotlib rejects; tensorboard pulls in TF→keras→pyplot at
+# import time and would crash on that lookup.
+import os
+os.environ["MPLBACKEND"] = "Agg"
+
 import json
 from datetime import datetime
 
