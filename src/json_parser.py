@@ -97,21 +97,28 @@ def parse_scene_annotations(file_path: Path) -> dict[str, str]:
     return scene_data
 
 
-def merge_dataset_levels(master_json: dict, scene_labels: dict[str, str]) -> dict:
+def merge_dataset_levels(
+    master_json: dict, scene_labels: dict[str, dict[str, str]],
+) -> dict:
     """
     Merge Stage 2 scene labels into the Stage 1 master JSON (in-place).
 
-    For every clip in *master_json*, this looks up the clip's middle frame
-    in *scene_labels* and adds a top-level ``"scene_class"`` key to the clip
-    entry.  Clips whose middle frame is not found in *scene_labels* receive
-    ``None``.
+    Every clip key in *master_json* is ``"video_id/clip_id"`` where the
+    clip folder is named after its middle (annotated) frame, so the label
+    is looked up as ``scene_labels[video_id]["<clip_id>.jpg"]``.  Clips
+    with no annotation entry receive ``None``.
+
+    The lookup MUST stay scoped to the clip's own video: frame names are
+    only unique within a video, so a flat ``frame_name -> label`` mapping
+    silently assigns labels from unrelated videos/clips.
 
     Parameters
     ----------
     master_json : dict
         The master dictionary produced by Stage 1 (``create_master_json``).
-    scene_labels : dict[str, str]
-        Combined output of ``parse_scene_annotations`` across all videos.
+    scene_labels : dict[str, dict[str, str]]
+        Per-video output of ``parse_scene_annotations``:
+        ``video_id -> {frame_name -> label}``.
 
     Returns
     -------
@@ -121,19 +128,14 @@ def merge_dataset_levels(master_json: dict, scene_labels: dict[str, str]) -> dic
     """
     merged_count = 0
 
-    for clip_id, content in master_json.items():
-        # Check 'actions' dictionary for frame names
-        frames = content.get("actions", {}).keys()
+    for clip_key, content in master_json.items():
+        video_id, clip_id = clip_key.split("/", 1)
+        clip_scene_label = scene_labels.get(video_id, {}).get(f"{clip_id}.jpg")
 
-        # Find the scene label for this clip by checking its frames
-        clip_scene_label = None
-        for img_name in frames:
-            if img_name in scene_labels:
-                clip_scene_label = scene_labels[img_name]
-                break  # All frames in a clip share one scene label
+        if clip_scene_label is None:
+            logger.warning("No scene label found for clip %s", clip_key)
 
-        # Add the scene label to the clip level
-        master_json[clip_id]["scene_class"] = clip_scene_label
+        content["scene_class"] = clip_scene_label
         if clip_scene_label:
             merged_count += 1
 
@@ -344,16 +346,17 @@ def enrich_with_scene_labels(
     """  # noqa: D205
     master_data = load_verified_json(json_path)
 
-    # annotations.txt lives at the *video* level, not per-clip
-    scene_labels: dict[str, str] = {}
+    # annotations.txt lives at the *video* level, not per-clip.
+    # Keep labels keyed per video — frame names collide across videos.
+    scene_labels: dict[str, dict[str, str]] = {}
     for video_folder in sorted(annotations_dir.iterdir()):
         if not video_folder.is_dir():
             continue
         annot_file = video_folder / "annotations.txt"
-        video_scenes = parse_scene_annotations(annot_file)
-        scene_labels.update(video_scenes)
+        scene_labels[video_folder.name] = parse_scene_annotations(annot_file)
 
-    logger.info("Collected scene labels for %d frames across all videos.", len(scene_labels))
+    total = sum(len(v) for v in scene_labels.values())
+    logger.info("Collected scene labels for %d clips across %d videos.", total, len(scene_labels))
 
     merged_data = merge_dataset_levels(master_data, scene_labels)
 
@@ -367,11 +370,15 @@ def enrich_with_scene_labels(
 
 if __name__ == "__main__":
     # ── Stage 1: create the master JSON from detections + tracking ──
-    # Uncomment to re-generate (takes a while on the full 60G dataset):
-    create_master_json(
-        detection_dir=VOLLEYBALL_DETECTION_DIR,
-        tracking_dir=VOLLEYBALL_TRACKING_DIR,
-    )
+    # Skipped when the JSON already exists (takes a while on the full 60G
+    # dataset); delete the file to force a full re-parse.
+    if JSON_DATA_DIR.exists():
+        logger.info("Master JSON already exists at %s — skipping Stage 1.", JSON_DATA_DIR)
+    else:
+        create_master_json(
+            detection_dir=VOLLEYBALL_DETECTION_DIR,
+            tracking_dir=VOLLEYBALL_TRACKING_DIR,
+        )
 
     # ── Stage 2: enrich with scene-level group-activity labels ──
     enrich_with_scene_labels()

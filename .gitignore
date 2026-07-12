@@ -27,13 +27,13 @@ DataSet/
 
 # --- Hydra (Configuration Outputs) ---
 # Hydra creates these folders for every run
-outputs/
+# outputs/
 multirun/
 .hydra/
 
 # --- TensorBoard & Logging ---
 # runs/
-*.log
+# *.log
 # events.out.tfevents.*
 
 # --- PyTorch Models & Checkpoints ---
