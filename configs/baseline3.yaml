@@ -1,6 +1,9 @@
 defaults:
   - _self_
-  - transforms: default_transforms.yaml
+  # Crop-specific pipeline: warps person crops straight to 224×224.
+  # default_transforms.yaml is for full-frame baselines and would cut
+  # tall player crops down to torso-only inputs.
+  - transforms: crop_transforms.yaml
 
 # Batch size is per-clip; each clip in a batch can carry up to ~12 players,
 # so the effective per-step forward count is ~batch_size * P_max.

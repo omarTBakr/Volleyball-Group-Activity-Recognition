@@ -1,0 +1,48 @@
+# Transform pipeline for per-player CROP baselines (B3, B5–B8).
+#
+# Person crops are tall and skinny (median 56×127 px, h/w ≈ 2.3), so the
+# full-frame pipeline in default_transforms.yaml is destructive here:
+# Resize(int) scales the SHORT side and the subsequent 224×224 crop keeps
+# only ~40% of the player's height (torso only — arms/legs cut off).
+#
+# Instead, warp each crop directly to 224×224 (tuple → exact size, aspect
+# distortion accepted — standard practice for person crops), keep only mild
+# photometric augmentation, and NO horizontal flip: the same train loader
+# also serves Stage B, where flipping swaps the meaning of l_* / r_* group
+# activities.
+
+train:
+  - _target_: torchvision.transforms.Resize
+    size: [224, 224]
+
+  - _target_: torchvision.transforms.ColorJitter
+    brightness: 0.3
+    contrast: 0.3
+    saturation: 0.3
+    hue: 0.05
+
+  - _target_: torchvision.transforms.ToTensor
+
+  - _target_: torchvision.transforms.Normalize
+    mean: [0.485, 0.456, 0.406]
+    std:  [0.229, 0.224, 0.225]
+
+validation:
+  - _target_: torchvision.transforms.Resize
+    size: [224, 224]
+
+  - _target_: torchvision.transforms.ToTensor
+
+  - _target_: torchvision.transforms.Normalize
+    mean: [0.485, 0.456, 0.406]
+    std: [0.229, 0.224, 0.225]
+
+test:
+  - _target_: torchvision.transforms.Resize
+    size: [224, 224]
+
+  - _target_: torchvision.transforms.ToTensor
+
+  - _target_: torchvision.transforms.Normalize
+    mean: [0.485, 0.456, 0.406]
+    std: [0.229, 0.224, 0.225]

@@ -2,7 +2,11 @@ defaults:
   - _self_
   - transforms: default_transforms.yaml
 
-batch_size: 64
+# Matched to baseline3's per-clip batch size so results are comparable
+# across baselines. Note: smaller batches at the same LR mean noisier
+# SGD steps — if training gets unstable, lower learning_rate before
+# touching batch_size again.
+batch_size: 16
 num_workers: 4
 pin_memory: false
 
@@ -12,9 +16,11 @@ warmup_lr: 1e-3
 
 # --- Stage 2: Full fine-tune (differential LR) ---
 num_epochs: 100
-learning_rate: 1e-3   # SGD backbone lr
+# Linear-scaled for batch_size 16 (was 1e-3 at batch 64: lr ∝ batch size).
+# If you raise batch_size again, scale this back up proportionally.
+learning_rate: 2.5e-4   # SGD backbone lr
 weight_decay: 1e-4    # bumped from 5e-4 to fight per-video memorization
-head_lr_multiplier: 3   # head lr = 1e-2
+head_lr_multiplier: 3   # head lr = learning_rate * 3 = 7.5e-4
 
 lr_scheduler:
   name: CosineAnnealingLR

@@ -89,3 +89,4 @@ best_model.pth
 *.swo
 
 BUG_REPORT.md
+PERFORMANCE_AUDIT_PLAN.md

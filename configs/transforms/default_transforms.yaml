@@ -1,28 +1,29 @@
-# Reusable transformation pipeline for all baselines.
+# Transform pipeline for FULL-FRAME baselines (B1, B4, ...).
+# Per-player crop baselines (B3, B5–B8) use crop_transforms.yaml instead.
 #
-# Train:  augmentation (random crop, flip, jitter) → tensor → normalize
-# Val/Test: deterministic resize + center crop → tensor → normalize
+# Frames are warped straight to 224×224 (tuple → exact size). Do NOT use
+# Resize(int) + a 224 crop here: Resize(256) on a 1280×720 frame gives
+# 455×256 and the crop then discards over half the court width — but the
+# 8 group activities come in left/right pairs (l_set vs r_set, ...), so
+# which side of the net is visible IS the label. The full court must stay
+# in view, at train and eval alike.
 #
-# The 224×224 crop size matches the ImageNet input size expected by
-# pretrained ResNet / VGG backbones.
+# No horizontal flip for the same reason: flipping swaps l_* / r_* meanings.
+#
+# Augmentation is intentionally mild (photometric only). The 224×224 size
+# matches the ImageNet input expected by pretrained ResNet/VGG backbones.
 
 train:
   - _target_: torchvision.transforms.Resize
-    size: 256
-    
-  - _target_: torchvision.transforms.RandomResizedCrop   # better than RandomCrop
     size: [224, 224]
-    scale: [0.85, 1.0]
-    
-    
+
   - _target_: torchvision.transforms.ColorJitter
     brightness: 0.3
     contrast: 0.3
     saturation: 0.3
     hue: 0.05          # 0.1 is too aggressive for volleyball — court colors matter
-  
 
-  - _target_: torchvision.transforms.TrivialAugmentWide   # disabled — re-enable only if overfitting (train F1 >> val F1)
+  # - _target_: torchvision.transforms.TrivialAugmentWide   # disabled — re-enable only if overfitting (train F1 >> val F1); note it includes geometric ops that can shift l/r framing
 
   - _target_: torchvision.transforms.ToTensor
 
@@ -33,12 +34,8 @@ train:
   # - _target_: torchvision.transforms.RandomErasing     # disabled — can occlude key players; re-enable as fine-tune regularizer
   #   p: 0.25
 
-
 validation:
   - _target_: torchvision.transforms.Resize
-    size: 256
-
-  - _target_: torchvision.transforms.CenterCrop
     size: [224, 224]
 
   - _target_: torchvision.transforms.ToTensor
@@ -49,9 +46,6 @@ validation:
 
 test:
   - _target_: torchvision.transforms.Resize
-    size: 256
-
-  - _target_: torchvision.transforms.CenterCrop
     size: [224, 224]
 
   - _target_: torchvision.transforms.ToTensor
