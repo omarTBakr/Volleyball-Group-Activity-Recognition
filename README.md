@@ -12,7 +12,8 @@ The snapshot shows the output of `python -m src.data.visualize_data` with `video
 
 - **Dataset**: 55 volleyball videos, 4,830 clips, two annotation levels — 8 group activities (scene-level) and 9 person actions (player-level).
 - **Baselines**: 8 progressively complex models (B1–B8) sharing a single data loader. **B1 and B3 are complete; B4–B8 are pending.**
-- **Current test scores**: B1 macro-F1 0.196 / B3 macro-F1 0.227 (see [Results](#results)).
+- **Current test scores**: B3 accuracy **60.7%** / macro-F1 **0.589**; B1 retraining in progress (see [Results](#results)).
+- **Data integrity**: a label-corruption bug that mislabeled 62% of clips was found and fixed in July 2026 — all results before the fix are invalid.
 - **Stack**: PyTorch + Hydra config + TensorBoard logging; multi-GPU via `nn.DataParallel`; Kaggle dual-T4 ready.
 - **Paper**: Ibrahim et al., *A Hierarchical Deep Temporal Model for Group Activity Recognition*, CVPR 2016.
 
@@ -57,10 +58,11 @@ All three scripts are singletons — they skip work if the output already exists
 ### 3. Verify the Loader
 
 ```bash
-python -m src.data.data_loader
+python -m src.data.data_loader          # LMDB backend (local)
+python -m src.data.kaggle_data_loader   # disk backend (Kaggle / no LMDB)
 ```
 
-Smoke-tests the dataset by pulling a few batches in full-image and crop mode.
+Smoke-tests the dataset by pulling a few batches in full-image and crop mode. After (re)building the JSON/pickle, also verify that each clip's `scene_class` matches its own video's `annotations.txt` before training.
 
 ### 4. Train a Baseline
 
@@ -68,6 +70,8 @@ Smoke-tests the dataset by pulling a few batches in full-image and crop mode.
 python -m models.baseline1   # B1: Two-stage fine-tuned ResNet-50
 python -m models.baseline3   # B3: Person-then-group crop classifier
 ```
+
+(With `uv`, prefix commands with `uv run`, e.g. `uv run python -m models.baseline1`.)
 
 Hyperparameters live in `configs/baseline{1,3}.yaml` (Hydra). Per-epoch metrics are written to `logs/<baseline>/runN.json` and a TensorBoard event file under `logs/<baseline>/tensorboard/runN/`.
 
@@ -98,27 +102,37 @@ Produces confusion matrix, classification report, precision–recall curves, and
 
 ## Results
 
+> **⚠ Results before July 2026 are invalid.** A silent bug in the annotation
+> merge assigned the wrong group-activity label to 62% of all clips, capping
+> every model near chance level (~21–23% test accuracy). A second bug in the
+> transforms cropped person crops down to torsos and full frames down to half
+> the court. Both are fixed and verified.
+> The tables below state which pipeline each number was measured on.
+
 ### Baseline 1 — Single-Frame Image Classifier
 
-Training uses a two-stage strategy: a linear probe (head-only) followed by full fine-tuning with differential learning rates and cosine annealing.
+Training uses a two-stage strategy: a linear probe (head-only) followed by full fine-tuning with differential learning rates and cosine annealing. Hyperparameters live in `configs/baseline1.yaml`; current values:
 
 | Hyperparameter | Value |
 |---|---|
 | Backbone | ResNet-50 (pretrained) |
-| Stage 1 (linear probe) | 5 epochs, lr = 1e-3 |
-| Stage 2 (full fine-tune) | 50 epochs, backbone lr = 1e-4, head lr = 3 × 1e-4 |
-| LR Scheduler | CosineAnnealingLR |
-| Label Smoothing | 0.1 |
-| Weight Decay | 0.05 |
-| Early Stopping Patience | 10 epochs |
+| Stage 1 (linear probe) | 10 epochs, lr = 1e-3 |
+| Stage 2 (partial fine-tune: layer3/4 + head) | up to 100 epochs, backbone lr = 2.5e-4, head lr = 7.5e-4 |
+| Batch Size | 16 (matched to B3 for comparability; LR linearly rescaled) |
+| LR Scheduler | CosineAnnealingLR (T_max = 100, eta_min = 1e-5) |
+| Label Smoothing | 0.01 |
+| Weight Decay | 1e-4 |
+| Early Stopping Patience | 25 epochs |
 
-#### Test Metrics
+#### Status
 
-| Metric | Value |
-|--------|-------|
-| Accuracy | 20.8% |
-| Macro F1 | .196 |
-| Loss | 2.4 |
+| Pipeline | Test Acc | Macro F1 | Notes |
+|---|---|---|---|
+| Corrupted labels (pre-fix) | 20.8% | 0.196 | invalid — label noise ceiling |
+| Fixed labels, old transforms | ~62% (val) | — | intermediate check, not a final number |
+| **Fixed labels + fixed transforms** | *retraining in progress* | — | full-court 224×224 warp, batch 16, scaled LR |
+
+Evaluation plots below are from the intermediate run (corrected labels, legacy transforms) and will be regenerated after the retrain:
 
 | Confusion Matrix | Classification Report |
 |:---:|:---:|
@@ -137,26 +151,40 @@ The concat pool gives the head two complementary signals: max captures *"is any 
 | Hyperparameter | Value |
 |---|---|
 | Backbone | ResNet-50 (pretrained) — `cfg.model.name` switchable to `resnet101` |
-| Stage A (person-action) | up to 100 epochs, lr = 1e-3, full backbone, class-weighted CE |
-| Stage B (group-activity head) | up to 100 epochs, lr = 1e-3, frozen backbone, MLP head |
+| Stage A (person-action) | up to 50 epochs, lr = 1e-3, full backbone, class-weighted CE |
+| Stage B (group-activity head) | up to 50 epochs, lr = 1e-3, frozen backbone, MLP head |
 | Stage B pool | `concat` (max + mean), classifier in = 2 × 2048 |
 | MLP head | `Linear(4096, 512) → ReLU → Dropout(0.4) → Linear(512, 8)` |
 | Optimizer | SGD, momentum 0.9, Nesterov, weight decay 5e-4 |
 | LR Scheduler (Stage B) | CosineAnnealingLR |
 | Label Smoothing | 0.01 |
+| Batch Size | 16 clips (~12 player crops each) |
+| Transforms | `crop_transforms.yaml` — direct 224×224 warp, whole player visible |
 | Class-weighted loss | inverse-frequency (`w_k = N / (K · n_k)`), both stages |
 | Multi-GPU | `nn.DataParallel` when `n_gpus > 1` (Kaggle dual-T4 ready) |
-| Early Stopping Patience | Stage A 25, Stage B 25 |
+| Early Stopping Patience | 10 epochs per stage |
 
-#### Test Metrics
+#### Test Metrics — run2 (fixed labels + fixed crop transforms)
 
 | Metric | Value |
 |--------|-------|
-| Accuracy | 23.11% |
-| Macro F1 | .227 |
-| Loss | 2.03 |
+| Accuracy | **60.73%** |
+| Macro F1 | **0.589** |
+| Loss | 1.09 |
 
-Macro F1 improved from .178 (legacy max-only pool, no class weighting) to .227 with the current code (concat pool + inverse-frequency class weighting in both stages) — a roughly 28% relative gain, driven mainly by recovered recall on the rare `l/r_winpoint` classes.
+Versus the pre-fix run (`logs/baseline3/run1.json` — corrupted labels, torso-only crops):
+
+| | run1 (pre-fix) | run2 (fixed) |
+|---|---|---|
+| Stage A best val acc / F1 (person actions) | 59.7% / 0.387 | **70.4% / 0.512** |
+| Stage B best val acc / F1 (group activity) | 39.2% / 0.370 | **60.0% / 0.584** |
+| Test acc / F1 | 23.1% / 0.227 | **60.7% / 0.589** |
+
+Stage A's gain isolates the transform fix (its person-action labels were never corrupted); Stage B's gain compounds correct labels with the better backbone.
+
+**Known limitation:** run2 overfits — final train accuracy is ~95% in both stages against ~58–70% validation. This is now an ordinary regularization problem (to be addressed with stronger augmentation / dropout / earlier stopping), not a data bug.
+
+Evaluation plots below are from **run2** (fixed pipeline):
 
 | Confusion Matrix | Classification Report |
 |:---:|:---:|
@@ -290,11 +318,11 @@ flowchart LR
 
 ```mermaid
 flowchart LR
-    AN[annotations.txt<br>per video] -->|parse_scene_annotations| SL["scene_labels<br>{frame.jpg → group_activity}"]
+    AN[annotations.txt<br>per video] -->|parse_scene_annotations| SL["scene_labels<br>{video_id → {frame.jpg → group_activity}}"]
     SL -->|merge_dataset_levels| MJ["Master JSON<br>+ scene_class per clip"]
 ```
 
-`enrich_with_scene_labels()` reads each video's `annotations.txt` to extract the **group-activity label** (one of 8 scene classes) and attaches it to each clip as `"scene_class"`.
+`enrich_with_scene_labels()` reads each video's `annotations.txt` to extract the **group-activity label** (one of 8 scene classes) and attaches it to each clip as `"scene_class"`. The lookup is **keyed per video** and matches each clip's own middle frame (`<clip_id>.jpg`) — frame names are only unique *within* a video, and a flat frame-name lookup here once mislabeled 62% of the dataset.
 
 ### Pickle & LMDB Caching
 
@@ -318,7 +346,14 @@ flowchart LR
 
 ## Data Loader API
 
-`VolleyballDataset` is a **generic** PyTorch `Dataset` that loads from the pickle cache and supports all baselines through constructor flags:
+`VolleyballDataset` is a **generic** PyTorch `Dataset` that loads from the pickle cache and supports all baselines through constructor flags. All logic lives in a shared base class (`src/data/base_dataset.py`); two thin backends provide the frame storage:
+
+| Import from | Frame storage | Use when |
+|---|---|---|
+| `src.data.data_loader` | LMDB (memory-mapped) | local training, LMDB built |
+| `src.data.kaggle_data_loader` | direct disk reads | Kaggle (no space for LMDB) |
+
+Both expose the identical `VolleyballDataset` / `collate_fn` interface — switching is a one-line import change.
 
 ```python
 from src.data.data_loader import VolleyballDataset, collate_fn
@@ -371,13 +406,14 @@ Each baseline that uses crop mode pairs the loader with a tiny `batch_unpack` ca
 Project1/
 ├── configs/
 │   ├── __init__.py              # Package exports
-│   ├── path_config.py           # All dataset/output paths
+│   ├── path_config.py           # All dataset/output paths (local + Kaggle aware)
 │   ├── data_split.py            # Train/val/test video IDs
 │   ├── labels.py                # Label-to-index mappings (8 group + 9 person)
 │   ├── baseline1.yaml           # Hydra config for B1
 │   ├── baseline3.yaml           # Hydra config for B3
 │   └── transforms/
-│       └── default_transforms.yaml
+│       ├── default_transforms.yaml  # FULL-FRAME baselines (B1, B4): 224×224 warp
+│       └── crop_transforms.yaml     # CROP baselines (B3, B5–B8): 224×224 warp
 │
 ├── src/
 │   ├── json_parser.py           # Two-stage parsing pipeline
@@ -385,8 +421,9 @@ Project1/
 │   ├── load_frames_into_lmdb.py # Pack frames into LMDB
 │   ├── load_frames_into_pickle.py
 │   └── data/
-│       ├── data_loader.py       # Original data loader
-│       ├── kaggle_data_loader.py# Kaggle-compatible data loader
+│       ├── base_dataset.py      # Shared dataset logic + collate_fn (storage-agnostic)
+│       ├── data_loader.py       # LMDB backend
+│       ├── kaggle_data_loader.py# Direct-from-disk backend (Kaggle)
 │       ├── data_summary.py      # Statistics and class distributions
 │       └── visualize_data.py    # Dataset visualization
 │
