@@ -87,3 +87,5 @@ best_model.pth
 *.temp
 *.swp
 *.swo
+
+BUG_REPORT.md
