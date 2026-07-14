@@ -12,8 +12,7 @@ The snapshot shows the output of `python -m src.data.visualize_data` with `video
 
 - **Dataset**: 55 volleyball videos, 4,830 clips, two annotation levels — 8 group activities (scene-level) and 9 person actions (player-level).
 - **Baselines**: 8 progressively complex models (B1–B8) sharing a single data loader. **B1 and B3 are complete; B4–B8 are pending.**
-- **Current test scores**: B3 accuracy **60.7%** / macro-F1 **0.589**; B1 retraining in progress (see [Results](#results)).
-- **Data integrity**: a label-corruption bug that mislabeled 62% of clips was found and fixed in July 2026 — all results before the fix are invalid.
+- **Current test scores**: B1 accuracy **62.6%** / macro-F1 **0.630**; B3 accuracy **60.7%** / macro-F1 **0.589** (see [Results](#results)).
 - **Stack**: PyTorch + Hydra config + TensorBoard logging; multi-GPU via `nn.DataParallel`; Kaggle dual-T4 ready.
 - **Paper**: Ibrahim et al., *A Hierarchical Deep Temporal Model for Group Activity Recognition*, CVPR 2016.
 
@@ -102,13 +101,6 @@ Produces confusion matrix, classification report, precision–recall curves, and
 
 ## Results
 
-> **⚠ Results before July 2026 are invalid.** A silent bug in the annotation
-> merge assigned the wrong group-activity label to 62% of all clips, capping
-> every model near chance level (~21–23% test accuracy). A second bug in the
-> transforms cropped person crops down to torsos and full frames down to half
-> the court. Both are fixed and verified.
-> The tables below state which pipeline each number was measured on.
-
 ### Baseline 1 — Single-Frame Image Classifier
 
 Training uses a two-stage strategy: a linear probe (head-only) followed by full fine-tuning with differential learning rates and cosine annealing. Hyperparameters live in `configs/baseline1.yaml`; current values:
@@ -124,15 +116,13 @@ Training uses a two-stage strategy: a linear probe (head-only) followed by full 
 | Weight Decay | 1e-4 |
 | Early Stopping Patience | 25 epochs |
 
-#### Status
+#### Test Metrics
 
-| Pipeline | Test Acc | Macro F1 | Notes |
-|---|---|---|---|
-| Corrupted labels (pre-fix) | 20.8% | 0.196 | invalid — label noise ceiling |
-| Fixed labels, old transforms | ~62% (val) | — | intermediate check, not a final number |
-| **Fixed labels + fixed transforms** | *retraining in progress* | — | full-court 224×224 warp, batch 16, scaled LR |
-
-Evaluation plots below are from the intermediate run (corrected labels, legacy transforms) and will be regenerated after the retrain:
+| Metric | Value |
+|--------|-------|
+| Accuracy | **62.60%** |
+| Macro F1 | **0.630** |
+| Loss | 1.42 |
 
 | Confusion Matrix | Classification Report |
 |:---:|:---:|
@@ -164,7 +154,7 @@ The concat pool gives the head two complementary signals: max captures *"is any 
 | Multi-GPU | `nn.DataParallel` when `n_gpus > 1` (Kaggle dual-T4 ready) |
 | Early Stopping Patience | 10 epochs per stage |
 
-#### Test Metrics — run2 (fixed labels + fixed crop transforms)
+#### Test Metrics
 
 | Metric | Value |
 |--------|-------|
@@ -172,19 +162,9 @@ The concat pool gives the head two complementary signals: max captures *"is any 
 | Macro F1 | **0.589** |
 | Loss | 1.09 |
 
-Versus the pre-fix run (`logs/baseline3/run1.json` — corrupted labels, torso-only crops):
+Stage A reaches 70.4% best validation accuracy (macro F1 0.512) on the 9 person actions; Stage B reaches 60.0% (0.584) on the 8 group activities.
 
-| | run1 (pre-fix) | run2 (fixed) |
-|---|---|---|
-| Stage A best val acc / F1 (person actions) | 59.7% / 0.387 | **70.4% / 0.512** |
-| Stage B best val acc / F1 (group activity) | 39.2% / 0.370 | **60.0% / 0.584** |
-| Test acc / F1 | 23.1% / 0.227 | **60.7% / 0.589** |
-
-Stage A's gain isolates the transform fix (its person-action labels were never corrupted); Stage B's gain compounds correct labels with the better backbone.
-
-**Known limitation:** run2 overfits — final train accuracy is ~95% in both stages against ~58–70% validation. This is now an ordinary regularization problem (to be addressed with stronger augmentation / dropout / earlier stopping), not a data bug.
-
-Evaluation plots below are from **run2** (fixed pipeline):
+**Known limitation:** the model overfits — final train accuracy is ~95% in both stages against ~58–70% validation. To be addressed with stronger augmentation / dropout / earlier stopping.
 
 | Confusion Matrix | Classification Report |
 |:---:|:---:|
@@ -322,7 +302,7 @@ flowchart LR
     SL -->|merge_dataset_levels| MJ["Master JSON<br>+ scene_class per clip"]
 ```
 
-`enrich_with_scene_labels()` reads each video's `annotations.txt` to extract the **group-activity label** (one of 8 scene classes) and attaches it to each clip as `"scene_class"`. The lookup is **keyed per video** and matches each clip's own middle frame (`<clip_id>.jpg`) — frame names are only unique *within* a video, and a flat frame-name lookup here once mislabeled 62% of the dataset.
+`enrich_with_scene_labels()` reads each video's `annotations.txt` to extract the **group-activity label** (one of 8 scene classes) and attaches it to each clip as `"scene_class"`. The lookup is **keyed per video** and matches each clip's own middle frame (`<clip_id>.jpg`), since frame names are only unique *within* a video.
 
 ### Pickle & LMDB Caching
 

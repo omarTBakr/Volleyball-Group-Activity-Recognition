@@ -46,7 +46,7 @@
 %----------------------------------------------------------
 
 \begin{abstract}
-   A condensed summary of the Volleyball Group Activity Recognition project: the data pipeline, the two completed baselines (B1: single-frame ResNet-50; B3: person-then-group crop classifier), and the two silent data bugs whose discovery and repair took Baseline 3 from 23\% to 61\% test accuracy. The dataset (Ibrahim et al., CVPR 2016) contains 55 videos / 4{,}830 clips with 8 scene-level group activities and 9 player-level actions.
+   A condensed summary of the Volleyball Group Activity Recognition project: the data pipeline, the generic multi-baseline loader, and the two completed baselines --- B1, a single-frame fine-tuned ResNet-50 (62.6\% test accuracy / 0.630 macro F1), and B3, a person-then-group crop classifier (60.7\% / 0.589). The dataset (Ibrahim et al., CVPR 2016) contains 55 videos / 4{,}830 clips with 8 scene-level group activities and 9 player-level actions.
 \end{abstract}
 
 %----------------------------------------------------------
@@ -67,20 +67,11 @@
 
     \taustart{V}olleyball Group Activity Recognition is a hierarchical classification problem: predict the scene-level group activity (8 classes: \texttt{l/r}-pass, -spike, -set, -winpoint) and the per-player action (9 classes: blocking, digging, falling, jumping, moving, setting, spiking, standing, waiting). The dataset comes from \href{https://www.cs.sfu.ca/~mori/research/papers/ibrahim-cvpr16.pdf}{``A Hierarchical Deep Temporal Model for Group Activity Recognition''} (Ibrahim et al., CVPR 2016; \href{https://github.com/mostafa-saad/deep-activity-rec}{official repo}, \href{https://www.kaggle.com/datasets/ahmedmohamed365/volleyball}{Kaggle mirror}).
 
-Key facts: \textbf{55 videos, 4{,}830 clips} (train/val/test = 2{,}152/1{,}341/1{,}337 clips over disjoint video splits of 24/15/16). Each clip has \textbf{41 frames}; the clip folder is named after its annotated \emph{middle frame}. Both label levels are heavily skewed: \texttt{standing} is $\approx$68\% of person actions, and \texttt{l/r\_winpoint} are $\approx$2.5$\times$ rarer than the other group classes. The group classes come in \textbf{left/right mirror pairs}, so horizontal geometry is part of the label --- no horizontal flips, no crops that discard court width.
+Key facts: \textbf{55 videos, 4{,}830 clips} (train/val/test = 2{,}152/1{,}341/1{,}337 clips over disjoint video splits of 24/15/16). Each clip has \textbf{41 frames}; the clip folder is named after its annotated \emph{middle frame}. Both label levels are heavily skewed: \texttt{standing} is $\approx$68\% of person actions, and \texttt{l/r\_winpoint} are $\approx$2.5$\times$ rarer than the other group classes. The group classes come in \textbf{left/right mirror pairs}, so horizontal geometry is part of the label --- the transform pipelines therefore use no horizontal flips and warp inputs directly to $224 \times 224$ so the full court (or the full player) always stays in view.
 
 \section{Data Pipeline}
 
-Three raw annotation sources (action detections, person detections, player tracking) are unified by a two-stage parser (\texttt{src/json\_parser.py}) into one master JSON keyed \texttt{video\_id/clip\_id}, then enriched with the group-activity label per clip and cached as a pickle ($\sim$247\,MB) for instant metadata loading. Frames are served either from a memory-mapped LMDB (local) or straight from disk (Kaggle); both backends expose the identical \texttt{VolleyballDataset}, which covers every baseline through flags: full frames or per-player crops, 1 or 9 frames per clip. A custom collate pads the variable player count per clip and returns a validity mask so padded slots never reach the loss or the pooling.
-
-\section{Milestone: Two Silent Data Bugs}
-
-Both baselines were initially stuck near chance level regardless of hyperparameters. Two input-corruption bugs --- neither of which ever raised an error --- were found and fixed in July 2026:
-
-\begin{enumerate}[leftmargin=*]
-    \item \textbf{Label corruption (62\% of the dataset).} The scene-label merge matched clips against a \emph{flat} frame-name dictionary, but frame names are only unique within a video; 3{,}001 of 4{,}830 clips received another clip's label. Fixed by keying the lookup per video and matching each clip's own middle frame; all 4{,}830 labels now verify against the per-video ground truth.
-    \item \textbf{Transforms destroyed the input.} Person crops (median $56 \times 127$\,px) went through a short-side resize + $224$ center crop that kept only $\approx$40\% of the player's height --- classifying arm/leg actions from torsos. Full frames similarly lost over half the court width, deleting the left/right signal. Both pipelines now warp directly to $224 \times 224$ with mild photometric augmentation only.
-\end{enumerate}
+Three raw annotation sources (action detections, person detections, player tracking) are unified by a two-stage parser (\texttt{src/json\_parser.py}) into one master JSON keyed \texttt{video\_id/clip\_id}, then enriched with the group-activity label per clip (looked up per video against each clip's own middle frame) and cached as a pickle ($\sim$247\,MB) for instant metadata loading. Frames are served either from a memory-mapped LMDB (local) or straight from disk (Kaggle); both backends expose the identical \texttt{VolleyballDataset}, which covers every baseline through flags: full frames or per-player crops, 1 or 9 frames per clip. A custom collate pads the variable player count per clip and returns a validity mask so padded slots never reach the loss or the pooling.
 
 \section{Baseline Roadmap}
 
@@ -109,46 +100,61 @@ Table~\ref{tab:baselines} lists the planned progression of models, each adding t
 
 Fine-tunes a pretrained ResNet-50 on the clip's middle frame for the 8 group classes. Two-stage schedule: linear probe (head only, 10 epochs, lr $10^{-3}$), then partial fine-tune of \texttt{layer3/4} + head (up to 100 epochs, backbone lr $2.5 \times 10^{-4}$, head $3\times$, cosine annealing, batch 16, frozen BatchNorm held in eval).
 
-After the label fix but still on the legacy transforms, B1 reached \textbf{62.98\% test accuracy / 0.641 macro F1} (up from 20.8\% / 0.196 under corrupted labels); Fig.~\ref{fig:b1-confusion} shows its confusion matrix. A retrain on the fully corrected pipeline (full-court warp, batch 16, rescaled lr) is in progress and will replace these numbers.
+\begin{table}[h]
+    \centering
+    \caption{Baseline 1 test-set metrics.}
+    \label{tab:b1-metrics}
+    \begin{tabular}{lc}
+        \toprule
+        \textbf{Metric} & \textbf{Value} \\
+        \midrule
+        Accuracy   & 62.60\% \\
+        Macro F1   & 0.630 \\
+        Test Loss  & 1.42 \\
+        \bottomrule
+    \end{tabular}
+\end{table}
+
+Fig.~\ref{fig:b1-confusion} shows the per-class confusion on the test split.
 
 \begin{figure}[h]
     \centering
     \includegraphics[width=0.95\linewidth]{figures/b1_confusion_matrix.png}
-    \caption{Baseline 1 test confusion matrix (corrected labels, legacy transforms).}
+    \caption{Baseline 1 test confusion matrix.}
     \label{fig:b1-confusion}
 \end{figure}
 
 \section{Baseline 3: Person-Then-Group}
 
-\textbf{Stage A} fine-tunes ResNet-50 on individual player crops for the 9 person actions with inverse-frequency class-weighted CE (without it the loss collapses onto \texttt{standing}). \textbf{Stage B} freezes that backbone, extracts a $(P, 2048)$ feature matrix per clip, concatenates masked max- and mean-pooling across players ($2 \times 2048$), and trains an MLP ($4096 \to 512 \to 8$, Dropout 0.4) with class-weighted CE for the group classes. SGD (momentum 0.9, Nesterov), 50 epochs and patience 10 per stage, batch 16 clips, \texttt{nn.DataParallel} on multi-GPU hosts.
+\textbf{Stage A} fine-tunes ResNet-50 on individual player crops for the 9 person actions with inverse-frequency class-weighted CE (without it the loss collapses onto \texttt{standing}). \textbf{Stage B} freezes that backbone, extracts a $(P, 2048)$ feature matrix per clip, concatenates masked max- and mean-pooling across players ($2 \times 2048$), and trains an MLP ($4096 \to 512 \to 8$, Dropout 0.4) with class-weighted CE for the group classes. SGD (momentum 0.9, Nesterov), 50 epochs and patience 10 per stage, batch 16 clips, \texttt{nn.DataParallel} on multi-GPU hosts. Stage A reaches 70.4\% validation accuracy (macro F1 0.512) on the person actions; Stage B 60.0\% (0.584) on the group activities.
 
 \begin{table}[h]
     \centering
-    \caption{Baseline 3 before/after the data-pipeline fixes.}
-    \label{tab:b3-run-compare}
-    \begin{tabular}{lcc}
+    \caption{Baseline 3 test-set metrics.}
+    \label{tab:b3-metrics}
+    \begin{tabular}{lc}
         \toprule
-        & \textbf{run 1 (pre-fix)} & \textbf{run 2 (fixed)} \\
+        \textbf{Metric} & \textbf{Value} \\
         \midrule
-        Stage A val acc / F1 & 59.7\% / 0.387 & 70.4\% / 0.512 \\
-        Stage B val acc / F1 & 39.2\% / 0.370 & 60.0\% / 0.584 \\
-        Test acc / F1        & 23.1\% / 0.227 & \textbf{60.7\% / 0.589} \\
+        Accuracy   & 60.73\% \\
+        Macro F1   & 0.589 \\
+        Test Loss  & 1.09 \\
         \bottomrule
     \end{tabular}
 \end{table}
 
-Stage A's gain isolates the transform fix (its labels were never corrupted); Stage B compounds the corrected labels with the stronger backbone. Fig.~\ref{fig:b3-confusion} shows the dominant remaining error mode: left/right mirror confusion within each activity pair, worst on the rare \texttt{r\_winpoint}. The other open issue is \textbf{overfitting} (train $\approx$95\% vs.\ val 58--70\%) --- a regularization problem for a follow-up run, not a data issue.
+Fig.~\ref{fig:b3-confusion} shows the dominant error mode: left/right mirror confusion within each activity pair, worst on the rare \texttt{r\_winpoint}. The main open issue is \textbf{overfitting} (train $\approx$95\% vs.\ val 58--70\%), to be addressed with stronger augmentation, higher dropout, and earlier stopping in a follow-up run.
 
 \begin{figure}[h]
     \centering
     \includegraphics[width=0.95\linewidth]{figures/b3_confusion_matrix.png}
-    \caption{Baseline 3 test confusion matrix (run 2, fixed pipeline).}
+    \caption{Baseline 3 test confusion matrix.}
     \label{fig:b3-confusion}
 \end{figure}
 
 \section{Next Steps}
 
-(i) Finish the B1 retrain on the corrected pipeline; (ii) attack B3's overfitting (stronger augmentation, higher dropout, earlier stopping); (iii) proceed to the temporal baselines B4--B8 --- noting that player tracking covers only $\approx$half of each clip's frames, so the detection-fallback path of the loader must be label-corrected before B5.
+(i) Reduce overfitting in both baselines (stronger augmentation, higher dropout, earlier stopping); (ii) proceed to the temporal baselines B4--B8 --- noting that player tracking covers only $\approx$half of each clip's frames, so the temporal crop baselines will exercise the loader's detection-fallback path, which should be reviewed before B5.
 
 %----------------------------------------------------------
 
