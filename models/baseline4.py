@@ -88,7 +88,7 @@ class TemporalImageClassifier(nn.Module):
         super().__init__()
 
         # Frozen — stays in eval mode and produces no-grad features.
-        self.extractor = FeatureExtractor(model_name=backbone_name, checkpoint=checkpoint)
+        self.extractor = FeatureExtractor(model_name=backbone_name)
 
         self.lstm = nn.LSTM(
             input_size=self.extractor.feature_dim,
