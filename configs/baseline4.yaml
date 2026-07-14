@@ -1,0 +1,50 @@
+defaults:
+  - _self_
+  # Full-frame pipeline (B4 consumes whole frames, not crops):
+  # warps each frame to 224×224 so the full court stays in view.
+  - transforms: default_transforms.yaml
+
+# Each sample is a 9-frame clip, so one batch = batch_size × n_frames frames
+# through the (frozen, no-grad) backbone per step.
+batch_size: 16
+n_frames: 9
+num_workers: 4
+pin_memory: false
+data_parallel: true
+
+# Single training stage: the backbone is frozen, only LSTM + head train.
+num_epochs: 50
+learning_rate: 1e-3           # SGD lr for the LSTM + classifier head
+weight_decay: 5e-4
+dropout: 0.3                  # MLP head (and between LSTM layers if > 1)
+early_stopping_patience: 10
+
+# Inverse-frequency CE weights for the 8 group-activity classes —
+# same rationale as baseline3 (l/r_winpoint ~2.5× rarer).
+class_weighted_loss: true
+label_smoothing: 0.01
+
+lstm:
+  hidden_dim: 512
+  num_layers: 1               # bump to 2 only if underfitting — dataset is
+                              # small (2,152 clips) and B1/B3 already overfit
+
+lr_scheduler:
+  name: CosineAnnealingLR
+  T_max: ${num_epochs}
+  eta_min: 1e-5
+
+model:
+  # Frozen feature-extractor backbone ("resnet50" or "resnet101").
+  name: "resnet50"
+  # Project checkpoint to load the backbone from. B4 is defined on
+  # Baseline 1's fine-tuned backbone; set to null to fall back to
+  # ImageNet weights (e.g. if the checkpoint isn't available on Kaggle).
+  checkpoint: "baseline1_run2.pt"
+
+device: cuda
+seed: 42
+
+hydra:
+  run:
+    dir: ./runs/baseline4/${now:%Y-%m-%d}/${now:%H-%M-%S}
