@@ -90,3 +90,7 @@ best_model.pth
 
 BUG_REPORT.md
 PERFORMANCE_AUDIT_PLAN.md
+*.bcf
+*.blg
+*.run.xml
+*.run
