@@ -214,6 +214,33 @@ def _run_one_epoch(
     unpack = batch_unpack or _default_batch_unpack
     accum = max(1, accumulate_grad_batches) if is_train else 1
 
+    # Live host-RAM telemetry (main process + dataloader workers) in the
+    # progress bar — makes OOM-killer deaths diagnosable from the run log.
+    # Reads /proc directly (Linux) so it needs no extra dependency.
+    def _rss_bytes(pid: str) -> int:
+        try:
+            with open(f"/proc/{pid}/status") as f:
+                for line in f:
+                    if line.startswith("VmRSS:"):
+                        return int(line.split()[1]) * 1024
+        except (OSError, ValueError, IndexError):
+            pass
+        return 0
+
+    def _ram_gb() -> float | None:
+        main = _rss_bytes("self")
+        if main == 0:
+            return None  # non-Linux → telemetry off
+        total = main
+        try:
+            import os as _os
+            with open(f"/proc/self/task/{_os.getpid()}/children") as f:
+                for child_pid in f.read().split():
+                    total += _rss_bytes(child_pid)
+        except OSError:
+            pass
+        return total / 1e9
+
     y_true: list[int] = []
     y_pred: list[int] = []
     running_loss = 0.0
@@ -258,6 +285,11 @@ def _run_one_epoch(
 
         y_true.extend(target.detach().cpu().tolist())
         y_pred.extend(output.argmax(dim=1).detach().cpu().tolist())
+
+        if n_steps % 25 == 0:
+            ram = _ram_gb()
+            if ram is not None:
+                pbar.set_postfix(ram=f"{ram:.1f}G", refresh=False)
 
     # Flush a leftover partial accumulation window at the end of the epoch.
     if is_train and pending_grads > 0:

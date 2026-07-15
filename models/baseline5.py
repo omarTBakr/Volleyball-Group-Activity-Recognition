@@ -256,6 +256,10 @@ def train_test(cfg: DictConfig) -> None:
         pin_memory=cfg.pin_memory,
         collate_fn=collate_fn,
     )
+    if cfg.num_workers > 0:
+        # Each queued B5 micro-batch is ~260 MB of crop tensors in shared
+        # memory; keep only one per worker in flight instead of the default 2.
+        loader_kwargs["prefetch_factor"] = cfg.get("prefetch_factor", 1)
     train_loader = DataLoader(train_dataset, shuffle=True, drop_last=True, **loader_kwargs)
     val_loader = DataLoader(val_dataset, shuffle=False, **loader_kwargs)
     test_loader = DataLoader(test_dataset, shuffle=False, **loader_kwargs)
