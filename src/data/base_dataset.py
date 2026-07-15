@@ -31,6 +31,7 @@ import logging
 from collections.abc import Callable, Sequence
 from typing import Any
 
+import numpy as np
 import torch  # ty:ignore[unresolved-import]
 from PIL import Image
 from torch.utils.data import Dataset  # ty:ignore[unresolved-import]
@@ -120,6 +121,47 @@ class BaseVolleyballDataset(Dataset):
 
         self.samples: list[tuple[str, str, dict]] = []
         self._build_samples()
+
+        # Everything __getitem__ needs is precomputed here into compact
+        # numpy/str records (~20 MB). DataLoader workers therefore never
+        # traverse the multi-GB annotation dict: forked copy-on-write pages
+        # stay shared instead of being gradually duplicated per worker as
+        # sampling touches them (which is what OOM-kills workers mid-epoch).
+        self._records: list[tuple] = []
+        self._precompute_records()
+
+    def _precompute_records(self) -> None:
+        """Resolve labels, frame selection, and person boxes per sample."""
+        for video_id, clip_id, clip_data in self.samples:
+            group_label = self._group_label(video_id, clip_id, clip_data)
+            frame_names = tuple(self._select_frame_names(video_id, clip_id, clip_data))
+
+            persons_per_frame: dict[str, tuple[np.ndarray, np.ndarray]] = {}
+            if not self.full_image:
+                for fname in frame_names:
+                    boxes: list[tuple[int, int, int, int]] = []
+                    labels: list[int] = []
+                    for person in self._get_persons_for_frame(clip_data, fname):
+                        box = person["box"]
+                        # Tracking uses [x1,y1,x2,y2]; detections use [x,y,w,h]
+                        if "id" in person:
+                            x1, y1, x2, y2 = box
+                        else:
+                            x, y, w, h = box
+                            x1, y1, x2, y2 = x, y, x + w, y + h
+                        boxes.append((x1, y1, x2, y2))
+                        action = person.get("action", "standing")
+                        labels.append(
+                            PERSON_ACTION_TO_IDX.get(action, PERSON_ACTION_TO_IDX["standing"]),
+                        )
+                    persons_per_frame[fname] = (
+                        np.asarray(boxes, dtype=np.int32).reshape(-1, 4),
+                        np.asarray(labels, dtype=np.int64),
+                    )
+
+            self._records.append(
+                (video_id, clip_id, group_label, frame_names, persons_per_frame),
+            )
 
     # ── Storage hooks (implemented by subclasses) ────────────────────────
 
@@ -249,49 +291,38 @@ class BaseVolleyballDataset(Dataset):
             return sorted(persons, key=lambda p: p.get("id", 0))
         return clip_data.get("actions", {}).get(frame_name, [])
 
-    def _crop_persons(
-        self, image: Image.Image, persons: list[dict],
+    @staticmethod
+    def _crop_boxes(
+        image: Image.Image, boxes: np.ndarray, labels: np.ndarray,
     ) -> tuple[list[Image.Image], list[int]]:
         """
-        Crop person regions from the image and collect action labels.
+        Crop person regions from the image given precomputed boxes.
 
-        Handles both tracking boxes ``[x1, y1, x2, y2]`` and detection
-        boxes ``[x, y, w, h]``.
+        Boxes are ``(P, 4)`` int arrays in ``[x1, y1, x2, y2]`` format
+        (detections were converted from ``[x, y, w, h]`` at precompute
+        time); they are clamped to image bounds here, and degenerate
+        boxes are skipped together with their labels.
         """
-        crops, labels = [], []
+        crops: list[Image.Image] = []
+        kept_labels: list[int] = []
         img_w, img_h = image.size
 
-        for person in persons:
-            box = person["box"]
-
-            # Tracking uses [x1, y1, x2, y2]; detections use [x, y, w, h]
-            if "id" in person:
-                x1, y1, x2, y2 = box
-            else:
-                x, y, w, h = box
-                x1, y1, x2, y2 = x, y, x + w, y + h
-
-            # Clamp to image bounds
-            x1 = max(0, x1)
-            y1 = max(0, y1)
-            x2 = min(img_w, x2)
-            y2 = min(img_h, y2)
-
+        for (x1, y1, x2, y2), label in zip(boxes.tolist(), labels.tolist()):
+            x1, y1 = max(0, x1), max(0, y1)
+            x2, y2 = min(img_w, x2), min(img_h, y2)
             if x2 <= x1 or y2 <= y1:
                 continue
-
             crops.append(image.crop((x1, y1, x2, y2)))
-            action = person.get("action", "standing")
-            labels.append(PERSON_ACTION_TO_IDX.get(action, PERSON_ACTION_TO_IDX["standing"]))
+            kept_labels.append(label)
 
-        return crops, labels
+        return crops, kept_labels
 
     # ── Dataset interface ─────────────────────────────────────────────────
 
     def __len__(self) -> int:
         return len(self.samples)
 
-    def __getitem__(self, idx: int):
+    def __getitem__(self, index: int):
         """
         Return a sample depending on the configured mode.
 
@@ -310,14 +341,16 @@ class BaseVolleyballDataset(Dataset):
             ``(crops_tensor [T,P,C,H,W], person_labels [P], group_label)``
 
         """
-        video_id, clip_id, clip_data = self.samples[idx]
-
-        group_label = self._group_label(video_id, clip_id, clip_data)
-        frame_names = self._select_frame_names(video_id, clip_id, clip_data)
+        # Read ONLY the precomputed record — never the master annotation dict
+        # (workers must not dirty its copy-on-write pages; see __init__).
+        video_id, clip_id, group_label, frame_names, persons_per_frame = self._records[index]
+        frame_names = list(frame_names)
 
         if self.full_image:
             return self._getitem_full_image(video_id, clip_id, frame_names, group_label)
-        return self._getitem_crop(video_id, clip_id, frame_names, clip_data, group_label)
+        return self._getitem_crop(
+            video_id, clip_id, frame_names, persons_per_frame, group_label,
+        )
 
     def _getitem_full_image(
         self,
@@ -349,7 +382,7 @@ class BaseVolleyballDataset(Dataset):
         video_id: str,
         clip_id: str,
         frame_names: list[str],
-        clip_data: dict,
+        persons_per_frame: dict[str, tuple[np.ndarray, np.ndarray]],
         group_label: int,
     ) -> tuple[torch.Tensor, torch.Tensor, int]:
         """Load cropped person images and return as tensor(s)."""
@@ -361,8 +394,8 @@ class BaseVolleyballDataset(Dataset):
                 return torch.empty(0), torch.empty(0, dtype=torch.long), group_label
 
             img = self._load_image(video_id, clip_id, middle_frame)
-            persons = self._get_persons_for_frame(clip_data, middle_frame)
-            crops, person_labels = self._crop_persons(img, persons)
+            boxes, labels = persons_per_frame[middle_frame]
+            crops, person_labels = self._crop_boxes(img, boxes, labels)
             crops = [_tf(c) for c in crops]
 
             if not crops:
@@ -380,8 +413,8 @@ class BaseVolleyballDataset(Dataset):
 
         for fname in frame_names:
             img = self._load_image(video_id, clip_id, fname)
-            persons = self._get_persons_for_frame(clip_data, fname)
-            crops, person_labels = self._crop_persons(img, persons)
+            boxes, labels = persons_per_frame[fname]
+            crops, person_labels = self._crop_boxes(img, boxes, labels)
             crops = [_tf(c) for c in crops]
 
             if crops:
