@@ -114,20 +114,24 @@ class TemporalPersonClassifier(nn.Module):
             dropout=dropout if lstm_layers > 1 else 0.0,
         )
 
+        # LayerNorm, not BatchNorm: training uses gradient accumulation with
+        # small micro-batches (4 clips, 2 per GPU under DataParallel), where
+        # batch statistics are meaningless noise. LayerNorm normalizes per
+        # sample and is batch-size independent.
         classifier_in = 2 * lstm_hidden if pool == "concat" else lstm_hidden
         self.classifier = nn.Sequential(
             nn.Linear(classifier_in, 512),
-            nn.BatchNorm1d(512),
+            nn.LayerNorm(512),
             nn.ReLU(inplace=True),
             nn.Dropout(p=dropout),
 
             nn.Linear(512, 256),
-            nn.BatchNorm1d(256),
+            nn.LayerNorm(256),
             nn.ReLU(inplace=True),
             nn.Dropout(p=dropout),
 
             nn.Linear(256, 128),
-            nn.BatchNorm1d(128),
+            nn.LayerNorm(128),
             nn.ReLU(inplace=True),
             nn.Dropout(p=dropout),
 
@@ -220,6 +224,19 @@ def train_test(cfg: DictConfig) -> None:
 
     ckpt_name = f"baseline5_{run_id}.pt"
 
+    # ── Gradient accumulation ─────────────────────────────────────────────
+    # cfg.batch_size is the EFFECTIVE batch; the loader carries only
+    # micro_batch_size clips at a time and gradients accumulate between
+    # optimizer steps — keeps per-step RAM/VRAM at micro-batch level.
+    effective_batch = cfg.batch_size
+    micro_batch = cfg.get("micro_batch_size", effective_batch)
+    if effective_batch % micro_batch != 0:
+        raise ValueError(
+            f"batch_size ({effective_batch}) must be divisible by "
+            f"micro_batch_size ({micro_batch}).",
+        )
+    accum_steps = effective_batch // micro_batch
+
     # ── Data (crop mode, 9-frame temporal window of player crops) ────────
     tf = build_transforms(cfg)
 
@@ -234,13 +251,11 @@ def train_test(cfg: DictConfig) -> None:
     )
 
     loader_kwargs = dict(
-        batch_size=cfg.batch_size,
+        batch_size=micro_batch,
         num_workers=cfg.num_workers,
         pin_memory=cfg.pin_memory,
         collate_fn=collate_fn,
     )
-    # drop_last on train: the head uses BatchNorm1d, which cannot run on a
-    # trailing batch of size 1 in train mode.
     train_loader = DataLoader(train_dataset, shuffle=True, drop_last=True, **loader_kwargs)
     val_loader = DataLoader(val_dataset, shuffle=False, **loader_kwargs)
     test_loader = DataLoader(test_dataset, shuffle=False, **loader_kwargs)
@@ -250,6 +265,7 @@ def train_test(cfg: DictConfig) -> None:
     print(f"  BASELINE 5: Temporal Person Classifier ({cfg.num_epochs} epochs, lr={cfg.learning_rate})")
     print(f"  Backbone: {cfg.model.name} (frozen, checkpoint={cfg.model.get('checkpoint')})")
     print(f"  Player pool: {cfg.get('pool', 'max')}")
+    print(f"  Batch: effective {effective_batch} = micro {micro_batch} × {accum_steps} accumulation steps")
     print(f"  Target: {NUM_GROUP_ACTIVITIES} classes — {list(GROUP_ACTIVITY_TO_IDX.keys())}")
     print(f"{'='*60}")
 
@@ -315,6 +331,7 @@ def train_test(cfg: DictConfig) -> None:
             model, train_loader, criterion, optimizer, device,
             batch_unpack=temporal_crop_unpack,
             num_classes=NUM_GROUP_ACTIVITIES,
+            accumulate_grad_batches=accum_steps,
             desc="Train[B5]",
         )
         val_loss, val_acc, val_f1, _ = validate_one_epoch(
@@ -385,7 +402,9 @@ def train_test(cfg: DictConfig) -> None:
         run_id=run_id,
         hparam_dict={
             "baseline":                "baseline5",
-            "batch_size":              cfg.batch_size,
+            "batch_size":              effective_batch,
+            "micro_batch_size":        micro_batch,
+            "accumulation_steps":      accum_steps,
             "n_frames":                cfg.n_frames,
             "num_epochs":              cfg.num_epochs,
             "learning_rate":           cfg.learning_rate,

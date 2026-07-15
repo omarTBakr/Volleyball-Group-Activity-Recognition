@@ -169,6 +169,7 @@ def _run_one_epoch(
     *,
     batch_unpack: BatchUnpack | None = None,
     num_classes: int | None = None,
+    accumulate_grad_batches: int = 1,
     desc: str = "Epoch",
 ) -> tuple[float, float, float, np.ndarray]:
     """
@@ -192,6 +193,12 @@ def _run_one_epoch(
         ``labels=range(num_classes)``, guaranteeing the metric/matrix shape
         is stable even when a class happens to be absent from an epoch.
         Pass ``None`` (default) for legacy behavior (sklearn auto-detection).
+    accumulate_grad_batches : int, default 1
+        Gradient accumulation: the optimizer steps once every N loader
+        batches, with each batch's loss scaled by 1/N — so the effective
+        batch size is ``loader_batch_size × N`` while per-step memory stays
+        at the loader batch size. Leftover gradients at the end of the
+        epoch are flushed with a final step. Ignored in eval mode.
     desc : str
         tqdm progress-bar description.
 
@@ -205,13 +212,17 @@ def _run_one_epoch(
     """
     is_train = optimizer is not None
     unpack = batch_unpack or _default_batch_unpack
+    accum = max(1, accumulate_grad_batches) if is_train else 1
 
     y_true: list[int] = []
     y_pred: list[int] = []
     running_loss = 0.0
     n_steps = 0
+    pending_grads = 0  # micro-batches backward-ed since the last optimizer step
 
     model.train(is_train)
+    if is_train:
+        optimizer.zero_grad()
 
     pbar = tqdm(dataloader, desc=desc, unit="batch", dynamic_ncols=True, leave=True)
     for batch in pbar:
@@ -234,15 +245,24 @@ def _run_one_epoch(
             loss = criterion(output, target)
 
         if is_train:
-            optimizer.zero_grad()
-            loss.backward()
-            optimizer.step()
+            # Scale so the accumulated gradient matches one big-batch step.
+            (loss / accum).backward()
+            pending_grads += 1
+            if pending_grads == accum:
+                optimizer.step()
+                optimizer.zero_grad()
+                pending_grads = 0
 
         running_loss += loss.item()
         n_steps += 1
 
         y_true.extend(target.detach().cpu().tolist())
         y_pred.extend(output.argmax(dim=1).detach().cpu().tolist())
+
+    # Flush a leftover partial accumulation window at the end of the epoch.
+    if is_train and pending_grads > 0:
+        optimizer.step()
+        optimizer.zero_grad()
 
     loss_epoch = running_loss / max(n_steps, 1)
 
@@ -282,6 +302,7 @@ def train_one_epoch(
     *,
     batch_unpack: BatchUnpack | None = None,
     num_classes: int | None = None,
+    accumulate_grad_batches: int = 1,
     desc: str = "Training",
 ) -> tuple[float, float, float, np.ndarray]:
     """
@@ -298,7 +319,8 @@ def train_one_epoch(
     """
     return _run_one_epoch(
         model, dataloader, criterion, optimizer, device,
-        batch_unpack=batch_unpack, num_classes=num_classes, desc=desc,
+        batch_unpack=batch_unpack, num_classes=num_classes,
+        accumulate_grad_batches=accumulate_grad_batches, desc=desc,
     )
 
 

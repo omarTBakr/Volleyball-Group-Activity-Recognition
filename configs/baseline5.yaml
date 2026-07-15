@@ -3,16 +3,15 @@ defaults:
   # Crop-specific pipeline: warps tall player crops straight to 224×224.
   - transforms: crop_transforms.yaml
 
-# B5 is the heaviest loader configuration so far: each clip yields
-# n_frames × P crops (9 × ~12 ≈ 108 images per clip), so one batch pushes
-# ~batch_size × 108 crops through the (frozen, no-grad) backbone per step.
-# Keep batch_size small; raise it only after checking GPU memory headroom.
-batch_size: 4
+# B5 is the heaviest loader configuration: each clip yields n_frames × P
+# crops (9 × ~12 ≈ 108 images). Gradient accumulation keeps the EFFECTIVE
+# batch at 16 (comparable with the other baselines) while only
+# micro_batch_size clips are ever materialized at once — the loader,
+# per-step RAM, and VRAM all scale with the micro batch, not with 16.
+batch_size: 16            # effective batch (optimizer steps at this size)
+micro_batch_size: 4       # clips per forward/backward; must divide batch_size
 n_frames: 9
-# 2 (not 4): every worker forks a copy of the ~1.7 GB annotation dict, and
-# each prefetched B5 batch is ~650 crop tensors (~400 MB) — worker count is
-# the main system-RAM multiplier on Kaggle's 30 GB box.
-num_workers: 1
+num_workers: 4
 pin_memory: false
 data_parallel: true
 
