@@ -107,6 +107,15 @@ class BaseVolleyballDataset(Dataset):
         self.transform = transform
 
         self._master_data: dict = load_from_pickle()
+
+        # The 'persons' detections are never read by the loader (crops come
+        # from tracking, with 'actions' as fallback) yet hold ~40% of the
+        # annotation RAM (~1.2 GB). Drop them so the dict forked into every
+        # DataLoader worker is as small as possible. Idempotent — the pickle
+        # cache is shared across train/val/test datasets.
+        for clip in self._master_data.values():
+            clip.pop("persons", None)
+
         self._frame_index: dict[tuple[str, str], list[str]] = self._load_frame_index()
 
         self.samples: list[tuple[str, str, dict]] = []

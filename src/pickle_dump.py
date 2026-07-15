@@ -29,9 +29,18 @@ def dump_to_pickle() -> None:
     print(f"Successfully dumped pickle to {PICKLE_DUMP_DIR}")
 
 
+# Per-process cache: the unpickled dict costs ~3 GB of RAM (Python object
+# overhead inflates the 247 MB file ~12×). Train/val/test datasets each call
+# load_from_pickle(), so without this cache one process holds three copies.
+_MASTER_DATA_CACHE: dict | None = None
+
+
 def load_from_pickle() -> dict:
     """
     Load and return the dictionary from the dumped pickle file.
+
+    The result is cached per process — every caller shares ONE dict.
+    Callers must treat the returned structure as shared state.
 
     Returns:
         dict: The volleyball master data dictionary.
@@ -40,6 +49,10 @@ def load_from_pickle() -> dict:
         FileNotFoundError: If the pickle file does not exist.
 
     """
+    global _MASTER_DATA_CACHE
+    if _MASTER_DATA_CACHE is not None:
+        return _MASTER_DATA_CACHE
+
     if not PICKLE_DUMP_DIR.exists():
         raise FileNotFoundError(
             f"Pickle file not found at {PICKLE_DUMP_DIR}. "
@@ -47,9 +60,9 @@ def load_from_pickle() -> dict:
         )
 
     with PICKLE_DUMP_DIR.open("rb") as pkl_file:
-        data = pickle.load(pkl_file)
+        _MASTER_DATA_CACHE = pickle.load(pkl_file)
 
-    return data
+    return _MASTER_DATA_CACHE
 
 
 if __name__ == "__main__":
