@@ -7,12 +7,12 @@ defaults:
 # n_frames × P crops (9 × ~12 ≈ 108 images per clip), so one batch pushes
 # ~batch_size × 108 crops through the (frozen, no-grad) backbone per step.
 # Keep batch_size small; raise it only after checking GPU memory headroom.
-batch_size: 8
+batch_size: 6
 n_frames: 9
 # 2 (not 4): every worker forks a copy of the ~1.7 GB annotation dict, and
 # each prefetched B5 batch is ~650 crop tensors (~400 MB) — worker count is
 # the main system-RAM multiplier on Kaggle's 30 GB box.
-num_workers: 2
+num_workers: 1
 pin_memory: false
 data_parallel: true
 
