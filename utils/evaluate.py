@@ -159,6 +159,35 @@ def _detect_lstm_shape(cfg: DictConfig) -> tuple[int, int]:
     return hidden, layers
 
 
+def _detect_b5_pool(lstm_hidden: int, cfg: DictConfig) -> str:
+    """Infer baseline5's player-pool mode from the saved classifier input width.
+
+    ``classifier.0.weight`` has input ``lstm_hidden`` for max/mean pooling and
+    ``2·lstm_hidden`` for concat. max and mean share a width, so between those
+    two the YAML value is trusted.
+    """
+    fallback = cfg.get("pool", "max")
+    fname = _PENDING_CKPT.get("filename")
+    if fname is None:
+        return fallback
+
+    from configs.path_config import MODEL_SAVE_DIR
+
+    try:
+        ckpt = torch.load(MODEL_SAVE_DIR / fname, map_location="cpu", weights_only=False)
+        saved_in = ckpt["model_state_dict"]["classifier.0.weight"].shape[1]
+    except (FileNotFoundError, KeyError):
+        return fallback
+
+    if saved_in == 2 * lstm_hidden and fallback != "concat":
+        print("  ⓘ Checkpoint classifier width = 2·lstm_hidden — using pool='concat'.")
+        return "concat"
+    if saved_in == lstm_hidden and fallback == "concat":
+        print("  ⓘ Checkpoint classifier width = lstm_hidden — using pool='max'.")
+        return "max"
+    return fallback
+
+
 def _build_model(baseline_name: str, cfg: DictConfig) -> nn.Module:
     """Instantiate the correct model architecture for *baseline_name*.
 
@@ -222,12 +251,30 @@ def _build_model(baseline_name: str, cfg: DictConfig) -> nn.Module:
             dropout=cfg.get("dropout", 0.3),
         )
 
-    # B5–B8 (temporal crop baselines): add a branch here once their model
-    # classes exist in models/ — mirror the baseline3 pattern (crop-mode
-    # dataset + mask-aware batch_unpack) with n_frames from the YAML.
+    if baseline_name == "baseline5":
+        # Temporal person classifier: frozen person features → shared LSTM
+        # per player → masked pool → head. Built with checkpoint=None; the
+        # saved baseline5 state_dict restores everything including the frozen
+        # extractor. LSTM shape and pool mode are read from the checkpoint.
+        from models.baseline5 import TemporalPersonClassifier
+
+        lstm_hidden, lstm_layers = _detect_lstm_shape(cfg)
+        pool = _detect_b5_pool(lstm_hidden, cfg)
+        return TemporalPersonClassifier(
+            num_classes=NUM_GROUP_ACTIVITIES,
+            backbone_name=cfg.model.name,
+            checkpoint=None,
+            lstm_hidden=lstm_hidden,
+            lstm_layers=lstm_layers,
+            dropout=cfg.get("dropout", 0.3),
+            pool=pool,
+        )
+
+    # B6–B8 (hierarchical temporal baselines): add a branch here once their
+    # model classes exist in models/ — mirror the baseline5 pattern.
     raise ValueError(
         f"Evaluation not implemented for baseline: '{baseline_name}'. "
-        "Supported: baseline1, baseline3, baseline4."
+        "Supported: baseline1, baseline3, baseline4, baseline5."
     )
 
 
@@ -242,9 +289,12 @@ def _dataset_kwargs_for(baseline_name: str, cfg: DictConfig) -> dict[str, Any]:
     if baseline_name == "baseline4":
         return {"full_image": True, "n_frames": cfg.get("n_frames", 9)}
 
+    if baseline_name == "baseline5":
+        return {"full_image": False, "crop": True, "n_frames": cfg.get("n_frames", 9)}
+
     raise ValueError(
         f"Dataset config not defined for baseline: '{baseline_name}'. "
-        "Supported: baseline1, baseline3, baseline4."
+        "Supported: baseline1, baseline3, baseline4, baseline5."
     )
 
 
@@ -261,6 +311,11 @@ def _batch_unpack_for(baseline_name: str) -> BatchUnpack:
         from models.baseline3 import stage_b_unpack
 
         return stage_b_unpack
+
+    if baseline_name == "baseline5":
+        from models.baseline5 import temporal_crop_unpack
+
+        return temporal_crop_unpack
 
     # Default: legacy 2-tuple ``(data, target)`` → ``model(data)``.
     # Covers baseline1 (single frame) and baseline4 (frame sequence) — both

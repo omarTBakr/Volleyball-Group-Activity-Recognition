@@ -1,0 +1,67 @@
+defaults:
+  - _self_
+  # Crop-specific pipeline: warps tall player crops straight to 224×224.
+  - transforms: crop_transforms.yaml
+
+# B5 is the heaviest loader configuration so far: each clip yields
+# n_frames × P crops (9 × ~12 ≈ 108 images per clip), so one batch pushes
+# ~batch_size × 108 crops through the (frozen, no-grad) backbone per step.
+# Keep batch_size small; raise it only after checking GPU memory headroom.
+batch_size: 8
+n_frames: 9
+num_workers: 4
+pin_memory: false
+data_parallel: true
+
+# Single training stage: the person-feature backbone is frozen —
+# only the per-player LSTM + pooling head train.
+num_epochs: 50
+learning_rate: 1e-3           # SGD lr for the LSTM + classifier head
+weight_decay: 5e-4
+dropout: 0.3                  # MLP head (and between LSTM layers if > 1)
+early_stopping_patience: 10
+
+# Inverse-frequency CE weights for the 8 group-activity classes —
+# same rationale as baseline3/4 (l/r_winpoint ~2.5× rarer).
+class_weighted_loss: true
+label_smoothing: 0.01
+
+# Per-player temporal model: one LSTM shared across players, run over each
+# player's 9-crop feature sequence.
+lstm:
+  hidden_dim: 512
+  num_layers: 1               # bump only if underfitting — every baseline
+                              # so far has overfit, not underfit
+
+# Aggregation across the player dimension AFTER the per-player LSTMs.
+# "max" is the paper's B5 definition; "concat" (max‖mean, doubles the
+# classifier input) is what worked best for B3's Stage B — worth an ablation.
+# Padded player slots must be excluded via the collate masks in all modes.
+pool: "max"
+
+# MLP head on the pooled player representation.
+classifier:
+  hidden_dim: 256
+
+lr_scheduler:
+  name: CosineAnnealingLR
+  T_max: ${num_epochs}
+  eta_min: 1e-5
+
+label_names: null   # class metadata comes from configs.labels, not YAML
+
+model:
+  # Frozen feature-extractor backbone ("resnet50" or "resnet101").
+  name: "resnet50"
+  # B5 is defined on person-action features: load Baseline 3's Stage-A
+  # backbone (trained on player crops for the 9 person actions).
+  # Set null to fall back to ImageNet weights — the run log prints which
+  # weights were actually loaded; verify it before letting a run continue.
+  checkpoint: "baseline3_stage_a_run2.pt"
+
+device: cuda
+seed: 42
+
+hydra:
+  run:
+    dir: ./runs/baseline5/${now:%Y-%m-%d}/${now:%H-%M-%S}

@@ -234,7 +234,10 @@ class BaseVolleyballDataset(Dataset):
         """
         persons = clip_data.get("tracking", {}).get(frame_name, [])
         if persons:
-            return persons
+            # Sort by track id so player index p refers to the SAME person in
+            # every frame of a clip — required by per-player temporal models
+            # (B5+); harmless for order-invariant pooling baselines (B3).
+            return sorted(persons, key=lambda p: p.get("id", 0))
         return clip_data.get("actions", {}).get(frame_name, [])
 
     def _crop_persons(
