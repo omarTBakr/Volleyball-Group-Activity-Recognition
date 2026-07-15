@@ -8,12 +8,12 @@ defaults:
 # batch at 16 (comparable with the other baselines) while only
 # micro_batch_size clips are ever materialized at once — the loader,
 # per-step RAM, and VRAM all scale with the micro batch, not with 16.
-batch_size: 16            # effective batch (optimizer steps at this size)
-micro_batch_size: 4       # clips per forward/backward; must divide batch_size
+batch_size: 8            # effective batch (optimizer steps at this size)
+micro_batch_size: 1       # clips per forward/backward; must divide batch_size
 n_frames: 9
 num_workers: 4
 pin_memory: false
-data_parallel: false
+data_parallel: true
 
 # Single training stage: the person-feature backbone is frozen —
 # only the per-player LSTM + pooling head train.
