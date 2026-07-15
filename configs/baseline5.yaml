@@ -13,7 +13,7 @@ micro_batch_size: 4       # clips per forward/backward; must divide batch_size
 n_frames: 9
 num_workers: 4
 pin_memory: false
-data_parallel: true
+data_parallel: false
 
 # Single training stage: the person-feature backbone is frozen —
 # only the per-player LSTM + pooling head train.
