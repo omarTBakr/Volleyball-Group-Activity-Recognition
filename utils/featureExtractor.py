@@ -68,6 +68,10 @@ class FeatureExtractor(nn.Module):
 
         if checkpoint:
             self._load_backbone_from_checkpoint(backbone, checkpoint)
+            print(f"  [FeatureExtractor] {model_name} weights loaded from checkpoint: {checkpoint}")
+        else:
+            print(f"  [FeatureExtractor] {model_name} using generic ImageNet weights "
+                  "(no project checkpoint given)")
 
         backbone.fc = nn.Identity()
         self.backbone = backbone

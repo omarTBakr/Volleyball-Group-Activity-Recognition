@@ -26,7 +26,7 @@ label_smoothing: 0.01
 
 lstm:
   hidden_dim: 512
-  num_layers: 1               # bump to 2 only if underfitting — dataset is
+  num_layers: 1              # bump to 2 only if underfitting — dataset is
                               # small (2,152 clips) and B1/B3 already overfit
 
 lr_scheduler:
