@@ -11,8 +11,8 @@ The snapshot shows the output of `python -m src.data.visualize_data` with `video
 ## At a Glance
 
 - **Dataset**: 55 volleyball videos, 4,830 clips, two annotation levels — 8 group activities (scene-level) and 9 person actions (player-level).
-- **Baselines**: 8 progressively complex models (B1–B8) sharing a single data loader. **B1 and B3 are complete; B4–B8 are pending.**
-- **Current test scores**: B1 accuracy **62.6%** / macro-F1 **0.630**; B3 accuracy **60.7%** / macro-F1 **0.589** (see [Results](#results)).
+- **Baselines**: 8 progressively complex models (B1–B8) sharing a single data loader. **B1, B3, and B4 are complete; B5–B8 are pending.**
+- **Current test scores**: B4 accuracy **66.1%** / macro-F1 **0.673** (best so far); B1 **62.6%** / **0.630**; B3 **60.7%** / **0.589** (see [Results](#results)).
 - **Stack**: PyTorch + Hydra config + TensorBoard logging; multi-GPU via `nn.DataParallel`; Kaggle dual-T4 ready.
 - **Paper**: Ibrahim et al., *A Hierarchical Deep Temporal Model for Group Activity Recognition*, CVPR 2016.
 
@@ -68,6 +68,7 @@ Smoke-tests the dataset by pulling a few batches in full-image and crop mode. Af
 ```bash
 python -m models.baseline1   # B1: Two-stage fine-tuned ResNet-50
 python -m models.baseline3   # B3: Person-then-group crop classifier
+python -m models.baseline4   # B4: Frozen B1 backbone → LSTM (needs baseline1_run2.pt)
 ```
 
 (With `uv`, prefix commands with `uv run`, e.g. `uv run python -m models.baseline1`.)
@@ -79,6 +80,7 @@ Hyperparameters live in `configs/baseline{1,3}.yaml` (Hydra). Per-epoch metrics 
 ```bash
 uv run python -m utils.evaluate --model baseline1_run1.pt           --baseline baseline1
 uv run python -m utils.evaluate --model baseline3_stage_b_run2.pt   --baseline baseline3
+uv run python -m utils.evaluate --model baseline4_run2.pt           --baseline baseline4
 ```
 
 Produces confusion matrix, classification report, precision–recall curves, and mAP under `plots/<baseline>/`. The Baseline 3 evaluator **auto-detects the saved pool mode** (`max` vs `concat`) from the checkpoint's classifier shape, so legacy and current checkpoints both load without YAML edits.
@@ -91,7 +93,7 @@ Produces confusion matrix, classification report, precision–recall curves, and
 |----------|--------|-------|----------|--------------|-------------|
 | **B1** | ✅ Done | Middle frame (full) | ✗ | ✗ | Image classifier (8 classes) |
 | **B3** | ✅ Done | Middle frame (crops) | ✗ | Crop classifier (9 classes) | Max+mean concat pool over players → MLP (8 classes) |
-| **B4** | 🔲 Pending | 9 frames (full) | LSTM on frame features | ✗ | LSTM → 8 classes |
+| **B4** | ✅ Done | 9 frames (full) | LSTM on frame features | ✗ | LSTM → 8 classes |
 | **B5** | 🔲 Pending | 9 frames (crops) | LSTM per player | Max-pool players | NN (8 classes) |
 | **B6** | 🔲 Pending | 9 frames (crops) | LSTM on pooled frames | Max-pool per frame | LSTM → 8 classes |
 | **B7** | 🔲 Pending | 9 frames (crops) | LSTM₁ per player + LSTM₂ | Max-pool per frame | LSTM₂ → 8 classes |
@@ -171,6 +173,44 @@ Stage A reaches 70.4% best validation accuracy (macro F1 0.512) on the 9 person 
 | ![Confusion Matrix](plots/baseline3/Confusion%20Matrix.png) | ![Classification Report](plots/baseline3/Classification%20Report.png) |
 | **Precision-Recall Curves** | **mAP & F1 per Class** |
 | ![Precision-Recall Curves](plots/baseline3/Precision-Recall%20Curves.png) | ![mAP & F1](plots/baseline3/mAP%20%26%20F1%20Score%20per%20Class.png) |
+
+---
+
+### Baseline 4 — Temporal Image Classifier (Frozen B1 Backbone → LSTM)
+
+Each clip's 9-frame window is pushed through a **frozen** feature extractor loaded from Baseline 1's fine-tuned backbone (`utils/featureExtractor.py`), producing a `(9, 2048)` feature sequence per clip. A single-layer LSTM consumes the sequence and its final hidden state is classified into the 8 group activities by a small MLP head. Only the LSTM + head train (~5.4M parameters).
+
+| Hyperparameter | Value |
+|---|---|
+| Feature extractor | ResNet-50, frozen, loaded from `baseline1_run2.pt` |
+| Input | 9 full frames per clip, 224×224 warp (`default_transforms.yaml`) |
+| LSTM | hidden 512, 1 layer |
+| MLP head | `Linear(512, 256) → ReLU → Dropout(0.3) → Linear(256, 8)` |
+| Optimizer | SGD lr = 1e-3, momentum 0.9, Nesterov, weight decay 5e-4 |
+| LR Scheduler | CosineAnnealingLR |
+| Batch Size | 16 clips (144 frames/step through the frozen backbone) |
+| Class-weighted loss | inverse-frequency, label smoothing 0.01 |
+| Early Stopping | patience 10 (stopped at epoch 14; best epoch 4) |
+
+#### Test Metrics
+
+| Metric | Value |
+|--------|-------|
+| Accuracy | **66.12%** |
+| Macro F1 | **0.673** |
+| Loss | 1.05 |
+
+Adding temporal context over B1's own features is worth **+3.5 accuracy points / +0.043 macro-F1** versus B1's single-frame result — the first direct evidence in this project that motion carries group-activity signal.
+
+**Known limitation:** convergence is extremely fast (best validation F1 at epoch 4, train accuracy ~99% by epoch 14) — the same overfitting pattern as B1/B3, and the strongest argument yet for a shared regularization pass.
+
+Evaluation plots:
+
+| Confusion Matrix | Classification Report |
+|:---:|:---:|
+| ![Confusion Matrix](plots/baseline4/Confusion%20Matrix.png) | ![Classification Report](plots/baseline4/Classification%20Report.png) |
+| **Precision-Recall Curves** | **mAP & F1 per Class** |
+| ![Precision-Recall Curves](plots/baseline4/Precision-Recall%20Curves.png) | ![mAP & F1](plots/baseline4/mAP%20%26%20F1%20Score%20per%20Class.png) |
 
 ---
 
@@ -391,6 +431,7 @@ Project1/
 │   ├── labels.py                # Label-to-index mappings (8 group + 9 person)
 │   ├── baseline1.yaml           # Hydra config for B1
 │   ├── baseline3.yaml           # Hydra config for B3
+│   ├── baseline4.yaml           # Hydra config for B4
 │   └── transforms/
 │       ├── default_transforms.yaml  # FULL-FRAME baselines (B1, B4): 224×224 warp
 │       └── crop_transforms.yaml     # CROP baselines (B3, B5–B8): 224×224 warp
@@ -409,12 +450,15 @@ Project1/
 │
 ├── models/
 │   ├── baseline1.py             # B1: Two-stage fine-tuned ResNet50 (✅ done)
-│   └── baseline3.py             # B3: Person-then-group crop classifier (✅ done)
+│   ├── baseline3.py             # B3: Person-then-group crop classifier (✅ done)
+│   └── baseline4.py             # B4: Frozen backbone → LSTM temporal classifier (✅ done)
 │
 ├── utils/
 │   ├── utility.py               # Training/eval loop helpers + class-weight tools
+│   ├── featureExtractor.py      # Frozen CNN feature extractor (ImageNet or B1 checkpoint)
 │   ├── evaluate.py              # Post-training evaluation + plots
 │   ├── plotting.py              # Confusion matrix, PR curves, mAP
+│   ├── download_models.py       # Pull trained checkpoints from Google Drive
 │   └── load_model_config.py     # Hydra config → transforms/scheduler builders
 │
 ├── reports/

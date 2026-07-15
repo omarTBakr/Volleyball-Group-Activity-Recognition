@@ -46,7 +46,7 @@
 %----------------------------------------------------------
 
 \begin{abstract}
-   A condensed summary of the Volleyball Group Activity Recognition project: the data pipeline, the generic multi-baseline loader, and the two completed baselines --- B1, a single-frame fine-tuned ResNet-50 (62.6\% test accuracy / 0.630 macro F1), and B3, a person-then-group crop classifier (60.7\% / 0.589). The dataset (Ibrahim et al., CVPR 2016) contains 55 videos / 4{,}830 clips with 8 scene-level group activities and 9 player-level actions.
+   A condensed summary of the Volleyball Group Activity Recognition project: the data pipeline, the generic multi-baseline loader, and the three completed baselines --- B1, a single-frame fine-tuned ResNet-50 (62.6\% test accuracy / 0.630 macro F1); B3, a person-then-group crop classifier (60.7\% / 0.589); and B4, a temporal classifier that runs an LSTM over B1's frozen frame features (66.1\% / 0.673, the strongest result so far). The dataset (Ibrahim et al., CVPR 2016) contains 55 videos / 4{,}830 clips with 8 scene-level group activities and 9 player-level actions.
 \end{abstract}
 
 %----------------------------------------------------------
@@ -79,7 +79,7 @@ Table~\ref{tab:baselines} lists the planned progression of models, each adding t
 
 \begin{table}[h]
     \centering
-    \caption{Baseline models. B1 and B3 are complete; B4--B8 pending.}
+    \caption{Baseline models. B1, B3, and B4 are complete; B5--B8 pending.}
     \label{tab:baselines}
     \begin{tabular}{lccc}
         \toprule
@@ -152,9 +152,37 @@ Fig.~\ref{fig:b3-confusion} shows the dominant error mode: left/right mirror con
     \label{fig:b3-confusion}
 \end{figure}
 
+\section{Baseline 4: Temporal Image Classifier}
+
+Each clip's 9-frame window is pushed through a \textbf{frozen} feature extractor loaded from Baseline 1's fine-tuned backbone, producing a $(9, 2048)$ feature sequence per clip. A single-layer LSTM (hidden 512) consumes the sequence and its final hidden state is classified by a small MLP head ($512 \to 256 \to 8$, Dropout 0.3). Only the LSTM + head train ($\approx$5.4M parameters; SGD lr $10^{-3}$, cosine annealing, class-weighted CE, batch 16 clips).
+
+\begin{table}[h]
+    \centering
+    \caption{Baseline 4 test-set metrics.}
+    \label{tab:b4-metrics}
+    \begin{tabular}{lc}
+        \toprule
+        \textbf{Metric} & \textbf{Value} \\
+        \midrule
+        Accuracy   & \textbf{66.12\%} \\
+        Macro F1   & \textbf{0.673} \\
+        Test Loss  & 1.05 \\
+        \bottomrule
+    \end{tabular}
+\end{table}
+
+B4 is the strongest baseline so far: temporal context over B1's own features is worth \textbf{+3.5 accuracy points / +0.043 macro F1} versus B1's single-frame result --- the first direct evidence in this project that motion carries group-activity signal. Convergence is very fast (best validation F1 at epoch 4; training accuracy $\approx$99\% by epoch 14, where early stopping fired), repeating the overfitting pattern of B1/B3. Fig.~\ref{fig:b4-confusion} shows the test confusion matrix.
+
+\begin{figure}[h]
+    \centering
+    \includegraphics[width=0.95\linewidth]{figures/b4_confusion_matrix.png}
+    \caption{Baseline 4 test confusion matrix.}
+    \label{fig:b4-confusion}
+\end{figure}
+
 \section{Next Steps}
 
-(i) Reduce overfitting in both baselines (stronger augmentation, higher dropout, earlier stopping); (ii) proceed to the temporal baselines B4--B8 --- noting that player tracking covers only $\approx$half of each clip's frames, so the temporal crop baselines will exercise the loader's detection-fallback path, which should be reviewed before B5.
+(i) Reduce overfitting across all baselines --- B4 peaks at epoch 4, so stronger augmentation, higher dropout, and earlier stopping are the levers; (ii) proceed to the temporal crop baselines B5--B8 --- noting that player tracking covers only $\approx$half of each clip's frames, so those baselines will exercise the loader's detection-fallback path, which should be reviewed before B5.
 
 %----------------------------------------------------------
 

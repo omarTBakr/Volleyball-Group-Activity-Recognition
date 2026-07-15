@@ -90,22 +90,3 @@ best_model.pth
 
 BUG_REPORT.md
 PERFORMANCE_AUDIT_PLAN.md
-*.bcf
-*.blg
-*.run.xml
-*.run
-*report.aux
-*report.bbl
-*report.bcf
-*report.blg
-*report.dvi
-*report.idx
-*report.ilg
-*report.log
-*report.out
-*report.run.xml
-*report.synctex.gz
-*report.toc
-*report.vrb
-report.run.xml
-*report.bcf 

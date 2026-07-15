@@ -83,7 +83,7 @@ def _detect_stage_b_pool(feature_dim: int, cfg: DictConfig) -> str:
         ``"max"`` (legacy single-pool), or whatever ``cfg.stage_b.pool``
         specifies (``"max"`` / ``"mean"`` / ``"concat"``).
     """
-    fname = _PENDING_STAGE_B_CKPT.get("filename")
+    fname = _PENDING_CKPT.get("filename")
     fallback = cfg.stage_b.get("pool", "concat")
     if fname is None:
         return fallback
@@ -120,8 +120,43 @@ def _detect_stage_b_pool(feature_dim: int, cfg: DictConfig) -> str:
 
 # Module-global passing the in-flight checkpoint filename to the model builder
 # without changing the public _build_model signature. Set inside `evaluate()`
-# just before _build_model is called; consulted by _detect_stage_b_pool.
-_PENDING_STAGE_B_CKPT: dict[str, str | None] = {"filename": None}
+# just before _build_model is called; consulted by the checkpoint-shape
+# detectors (_detect_stage_b_pool, _detect_lstm_shape).
+_PENDING_CKPT: dict[str, str | None] = {"filename": None}
+
+
+def _detect_lstm_shape(cfg: DictConfig) -> tuple[int, int]:
+    """Infer (hidden_dim, num_layers) of a saved TemporalImageClassifier.
+
+    Guards against config drift: if baseline4.yaml was edited after training
+    (e.g. ``lstm.num_layers`` 1 → 2), building from the YAML alone would make
+    ``load_state_dict`` fail. The saved LSTM weights carry the truth:
+    ``lstm.weight_ih_l0`` has shape ``(4·hidden, input)`` and a key
+    ``lstm.weight_ih_l{k}`` exists per layer k.
+    """
+    fallback = (cfg.lstm.hidden_dim, cfg.lstm.num_layers)
+    fname = _PENDING_CKPT.get("filename")
+    if fname is None:
+        return fallback
+
+    from configs.path_config import MODEL_SAVE_DIR
+
+    try:
+        ckpt = torch.load(MODEL_SAVE_DIR / fname, map_location="cpu", weights_only=False)
+        state = ckpt["model_state_dict"]
+        hidden = state["lstm.weight_ih_l0"].shape[0] // 4
+        layers = 1 + max(
+            (int(k.split("_l")[-1]) for k in state if k.startswith("lstm.weight_ih_l")),
+        )
+    except (FileNotFoundError, KeyError, ValueError):
+        return fallback
+
+    if (hidden, layers) != fallback:
+        print(
+            f"  ⓘ Checkpoint LSTM shape (hidden={hidden}, layers={layers}) "
+            f"overrides cfg (hidden={fallback[0]}, layers={fallback[1]})."
+        )
+    return hidden, layers
 
 
 def _build_model(baseline_name: str, cfg: DictConfig) -> nn.Module:
@@ -168,12 +203,35 @@ def _build_model(baseline_name: str, cfg: DictConfig) -> nn.Module:
             pool=pool,
         )
 
+    if baseline_name == "baseline4":
+        # Temporal full-image classifier: frozen extractor → LSTM → head.
+        # Build with checkpoint=None (ImageNet init) — _load_checkpoint then
+        # restores EVERYTHING from the saved baseline4 state_dict, including
+        # the frozen extractor weights, so baseline1's checkpoint is not
+        # needed at evaluation time. LSTM shape is read from the checkpoint
+        # to survive later YAML edits.
+        from models.baseline4 import TemporalImageClassifier
+
+        lstm_hidden, lstm_layers = _detect_lstm_shape(cfg)
+        return TemporalImageClassifier(
+            num_classes=NUM_GROUP_ACTIVITIES,
+            backbone_name=cfg.model.name,
+            checkpoint='baseline1_run2.pt',
+            lstm_hidden=lstm_hidden,
+            lstm_layers=lstm_layers,
+            dropout=cfg.get("dropout", 0.3),
+        )
+
+    # B5–B8 (temporal crop baselines): add a branch here once their model
+    # classes exist in models/ — mirror the baseline3 pattern (crop-mode
+    # dataset + mask-aware batch_unpack) with n_frames from the YAML.
     raise ValueError(
-        f"Evaluation not implemented for baseline: '{baseline_name}'"
+        f"Evaluation not implemented for baseline: '{baseline_name}'. "
+        "Supported: baseline1, baseline3, baseline4."
     )
 
 
-def _dataset_kwargs_for(baseline_name: str) -> dict[str, Any]:
+def _dataset_kwargs_for(baseline_name: str, cfg: DictConfig) -> dict[str, Any]:
     """Return the ``VolleyballDataset`` keyword arguments for *baseline_name*."""
     if baseline_name == "baseline1":
         return {"full_image": True, "n_frames": 1}
@@ -181,8 +239,12 @@ def _dataset_kwargs_for(baseline_name: str) -> dict[str, Any]:
     if baseline_name == "baseline3":
         return {"full_image": False, "crop": True, "n_frames": 1}
 
+    if baseline_name == "baseline4":
+        return {"full_image": True, "n_frames": cfg.get("n_frames", 9)}
+
     raise ValueError(
-        f"Dataset config not defined for baseline: '{baseline_name}'"
+        f"Dataset config not defined for baseline: '{baseline_name}'. "
+        "Supported: baseline1, baseline3, baseline4."
     )
 
 
@@ -201,6 +263,8 @@ def _batch_unpack_for(baseline_name: str) -> BatchUnpack:
         return stage_b_unpack
 
     # Default: legacy 2-tuple ``(data, target)`` → ``model(data)``.
+    # Covers baseline1 (single frame) and baseline4 (frame sequence) — both
+    # use full-image mode whose collate emits plain (images, labels) batches.
     def _default(batch):
         if not batch or len(batch) < 2:
             return None
@@ -387,16 +451,17 @@ def evaluate(model_filename: str, baseline_name: str) -> None:
         cfg = compose(config_name=baseline_name)
 
     # ── Pipeline ──────────────────────────────────────────────────────
-    # Surface the checkpoint name to the builder so baseline3 can auto-detect
-    # the right pool mode from the saved classifier shape (backward-compat
-    # with checkpoints saved before the concat-pool change).
-    _PENDING_STAGE_B_CKPT["filename"] = model_filename
+    # Surface the checkpoint name to the builder so architecture details can
+    # be auto-detected from the saved shapes (baseline3's pool mode,
+    # baseline4's LSTM hidden/layers) instead of trusting a possibly-edited
+    # YAML.
+    _PENDING_CKPT["filename"] = model_filename
     try:
         model = _build_model(baseline_name, cfg)
     finally:
-        _PENDING_STAGE_B_CKPT["filename"] = None
+        _PENDING_CKPT["filename"] = None
 
-    dataset_kwargs = _dataset_kwargs_for(baseline_name)
+    dataset_kwargs = _dataset_kwargs_for(baseline_name, cfg)
     batch_unpack = _batch_unpack_for(baseline_name)
     test_loader = _build_test_loader(cfg, dataset_kwargs)
 

@@ -22,7 +22,8 @@ plot_f1_score
 plot_precision_recall_auc
     Per-class Precision–Recall curves with AUC values.
 plot_classification_report
-    Heatmap of the sklearn classification report (precision / recall / F1).
+    Grouped horizontal bar chart of per-class precision / recall / F1
+    with support counts and aggregate metrics in the subtitle.
 plot_map_f1
     Bar chart comparing Mean Average Precision and macro-F1 per class.
 """
@@ -400,17 +401,14 @@ def plot_classification_report(
     baseline: str | None = None,
 ) -> dict:
     """
-    Render the sklearn classification report as a confusion-matrix-style heatmap.
+    Render the sklearn classification report as a grouped horizontal bar chart.
 
-    The heatmap uses the same ``Blues`` colour map, bold title, and
-    white/black cell annotations as :func:`plot_confusion_matrix` so that
-    all evaluation visuals share a consistent look.
-
-    Rows correspond to per-class metrics plus the aggregate rows
-    (``accuracy``, ``macro avg``, ``weighted avg``).  Columns are
-    **precision**, **recall**, **f1-score**, and **support**.  The
-    ``support`` column is annotated in the cells but excluded from
-    the colour mapping (it lives on a different scale).
+    One row per class with three bars — **precision**, **recall**, and
+    **F1** — so per-class strengths and weaknesses can be compared at a
+    glance (unlike the raw text table). Each class label carries its
+    support count, bar values are annotated at the bar ends, and the
+    aggregate metrics (accuracy, macro-F1, weighted-F1) appear as a
+    subtitle rather than as pseudo-rows.
 
     Parameters
     ----------
@@ -451,68 +449,64 @@ def plot_classification_report(
         zero_division=0,
     )
 
-    # ── Build the data matrix ──
-    metric_cols = ["precision", "recall", "f1-score", "support"]
+    n_classes = len(class_names)
+    precision = [report[c]["precision"] for c in class_names]
+    recall = [report[c]["recall"] for c in class_names]
+    f1 = [report[c]["f1-score"] for c in class_names]
+    support = [int(report[c]["support"]) for c in class_names]
 
-    row_labels: list[str] = list(class_names)
-    for key in ("accuracy", "macro avg", "weighted avg"):
-        if key in report:
-            row_labels.append(key)
-
-    data: list[list[float]] = []
-    for row in row_labels:
-        if row == "accuracy":
-            acc_val = report["accuracy"]
-            support_val = report.get("macro avg", {}).get("support", 0)
-            data.append([acc_val, acc_val, acc_val, support_val])
-        else:
-            data.append([report[row][c] for c in metric_cols])
-
-    data_arr = np.array(data)
-    n_rows = len(row_labels)
-    n_cols = len(metric_cols)
-
-    # ── Figure (square-ish, matching confusion-matrix proportions) ──
-    fig_h = max(6, n_rows * 0.7 + 2)
+    # ── Grouped horizontal bars (first class on top) ──
+    y = np.arange(n_classes)
+    bar_h = 0.26
+    fig_h = max(6, n_classes * 1.0 + 1.5)
     fig, ax = plt.subplots(figsize=(10, fig_h))
 
-    # Use Blues cmap (same as confusion matrix) on the [0,1] metric columns.
-    # Build a full-size array but mask the support column so it doesn't
-    # distort the colour range.
-    display = data_arr[:, :3]  # precision, recall, f1 only
-    im = ax.imshow(
-        display, interpolation="nearest",
-        cmap=plt.cm.Blues, aspect="auto", vmin=0.0, vmax=1.0,
+    # Offsets chosen so that, with the inverted y-axis, bars appear
+    # top-to-bottom as Precision / Recall / F1 — matching the legend order.
+    bar_groups = (
+        (precision, "Precision", "#4C72B0", -bar_h),
+        (recall,    "Recall",    "#55A868", 0.0),
+        (f1,        "F1 Score",  "#DD8452", +bar_h),
     )
-    fig.colorbar(im, ax=ax)
-
-    # Ticks
-    ax.set_xticks(np.arange(n_cols))
-    ax.set_xticklabels(metric_cols, fontsize=12)
-    ax.set_yticks(np.arange(n_rows))
-    ax.set_yticklabels(row_labels, fontsize=12)
-
-    # ── Annotate every cell (same style as confusion matrix) ──
-    thresh = display.max() / 2.0
-    for i in range(n_rows):
-        for j in range(n_cols):
-            val = data_arr[i, j]
-            if j == 3:
-                # Support: integer, always black, right-aligned
-                text = f"{int(val)}"
-                color = "black"
-            else:
-                text = f"{val:.2f}"
-                color = "white" if val > thresh else "black"
-
+    for values, label, color, offset in bar_groups:
+        bars = ax.barh(
+            y + offset, values, bar_h,
+            label=label, color=color, edgecolor="white",
+        )
+        for bar in bars:
             ax.text(
-                j, i, text,
-                ha="center", va="center",
-                fontsize=11, fontweight="bold",
-                color=color,
+                bar.get_width() + 0.012,
+                bar.get_y() + bar.get_height() / 2,
+                f"{bar.get_width():.2f}",
+                ha="left", va="center", fontsize=8.5, fontweight="bold",
             )
 
-    ax.set_title(title, fontsize=14, fontweight="bold")
+    # Macro-F1 reference line
+    macro_f1 = report["macro avg"]["f1-score"]
+    ax.axvline(macro_f1, color="#DD8452", linestyle="--", linewidth=1.2,
+               alpha=0.8, label=f"Macro-F1 = {macro_f1:.3f}", zorder=0)
+
+    ax.set_yticks(y)
+    ax.set_yticklabels(
+        [f"{name}\n(n={n})" for name, n in zip(class_names, support)],
+        fontsize=11,
+    )
+    ax.invert_yaxis()  # first class at the top, like the text report
+    ax.set_xlim(0.0, 1.12)
+    ax.set_xlabel("Score", fontsize=12)
+    ax.grid(axis="x", alpha=0.3)
+    ax.legend(loc="lower right", fontsize=9, framealpha=0.9)
+
+    acc = report["accuracy"]
+    weighted_f1 = report["weighted avg"]["f1-score"]
+    total = int(report["macro avg"]["support"])
+    ax.set_title(
+        f"{title}\n"
+        f"accuracy {acc:.3f}  ·  macro F1 {macro_f1:.3f}  ·  "
+        f"weighted F1 {weighted_f1:.3f}  ·  N = {total}",
+        fontsize=13, fontweight="bold",
+    )
+
     fig.tight_layout()
     fig.savefig(out_dir / f"{title}.png", bbox_inches="tight", dpi=300)
     plt.close(fig)
