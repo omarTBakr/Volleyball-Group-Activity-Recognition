@@ -7,7 +7,7 @@ defaults:
 # crops (9 × ~12 ≈ 108 images). Gradient accumulation keeps the EFFECTIVE
 # batch at 16 while only micro_batch_size clips are ever materialized at
 # once — loader queues, per-step RAM, and VRAM all scale with the micro batch.
-batch_size: 16            # effective batch (optimizer steps at this size)
+batch_size: 8            # effective batch (optimizer steps at this size)
 micro_batch_size: 1       # clips per forward/backward; must divide batch_size
 n_frames: 9
 num_workers: 4
