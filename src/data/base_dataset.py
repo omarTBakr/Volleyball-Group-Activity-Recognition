@@ -409,7 +409,7 @@ class BaseVolleyballDataset(Dataset):
 
         # Temporal crops — use tracking data per frame for accurate boxes
         all_frame_crops = []
-        last_person_labels = []
+        all_frame_labels: list[list[int] | None] = []
 
         for fname in frame_names:
             img = self._load_image(video_id, clip_id, fname)
@@ -419,13 +419,24 @@ class BaseVolleyballDataset(Dataset):
 
             if crops:
                 all_frame_crops.append(torch.stack(crops, dim=0))  # (P, C, H, W)
-                last_person_labels = person_labels
+                all_frame_labels.append(person_labels)
             else:
                 all_frame_crops.append(None)
+                all_frame_labels.append(None)
 
         valid_frames = [f for f in all_frame_crops if f is not None]
         if not valid_frames:
             return torch.empty(0), torch.empty(0, dtype=torch.long), group_label
+
+        # Person labels come from the frame nearest to the MIDDLE (annotated
+        # target) frame that has crops — actions change within a clip, and the
+        # middle frame is what the annotations describe.
+        mid = len(frame_names) // 2
+        person_labels = next(
+            all_frame_labels[mid + off]
+            for off in sorted(range(-mid, len(frame_names) - mid), key=abs)
+            if 0 <= mid + off < len(all_frame_labels) and all_frame_labels[mid + off] is not None
+        )
 
         # Frames can carry different person counts (tracking dropouts /
         # detection fallback) — zero-pad each frame to the clip max so the
@@ -440,7 +451,7 @@ class BaseVolleyballDataset(Dataset):
 
         return (
             torch.stack(valid_frames, dim=0),                    # (T, P, C, H, W)
-            torch.tensor(last_person_labels, dtype=torch.long),  # (P,)
+            torch.tensor(person_labels, dtype=torch.long),       # (P,)
             group_label,
         )
 
@@ -492,8 +503,12 @@ def _pad_and_stack_crops(
                 continue
             t, n = crops.shape[0], crops.shape[1]
             padded_crops[i, :t, :n] = crops
-            padded_labels[i, :n] = plabels
-            masks[i, :n] = True
+            # Labels come from the clip's middle frame, which can carry fewer
+            # persons than the clip-max player count n; only slots that have
+            # BOTH a crop track and a label are marked valid.
+            k = min(n, plabels.shape[0])
+            padded_labels[i, :k] = plabels[:k]
+            masks[i, :k] = True
     else:
         raise ValueError(f"Unexpected crop shape: {sample_shape}")
 

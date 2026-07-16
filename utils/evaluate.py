@@ -144,9 +144,12 @@ def _detect_lstm_shape(cfg: DictConfig) -> tuple[int, int]:
     try:
         ckpt = torch.load(MODEL_SAVE_DIR / fname, map_location="cpu", weights_only=False)
         state = ckpt["model_state_dict"]
-        hidden = state["lstm.weight_ih_l0"].shape[0] // 4
+        # baseline4 stores the LSTM at top level; baseline5's Stage-B model
+        # nests it inside the frozen Stage-A module ("person.lstm.").
+        prefix = "lstm." if "lstm.weight_ih_l0" in state else "person.lstm."
+        hidden = state[f"{prefix}weight_ih_l0"].shape[0] // 4
         layers = 1 + max(
-            (int(k.split("_l")[-1]) for k in state if k.startswith("lstm.weight_ih_l")),
+            (int(k.split("_l")[-1]) for k in state if k.startswith(f"{prefix}weight_ih_l")),
         )
     except (FileNotFoundError, KeyError, ValueError):
         return fallback
@@ -159,33 +162,40 @@ def _detect_lstm_shape(cfg: DictConfig) -> tuple[int, int]:
     return hidden, layers
 
 
-def _detect_b5_pool(lstm_hidden: int, cfg: DictConfig) -> str:
-    """Infer baseline5's player-pool mode from the saved classifier input width.
+def _detect_b5_head(lstm_hidden: int, cfg: DictConfig) -> tuple[str, int]:
+    """Infer baseline5's (pool mode, MLP hidden width) from the checkpoint.
 
-    ``classifier.0.weight`` has input ``lstm_hidden`` for max/mean pooling and
-    ``2·lstm_hidden`` for concat. max and mean share a width, so between those
-    two the YAML value is trusted.
+    ``classifier.0.weight`` has shape ``(hidden_dim, classifier_in)`` where
+    ``classifier_in`` is ``lstm_hidden`` for max/mean pooling and
+    ``2·lstm_hidden`` for concat. max and mean share a width, so between
+    those two the YAML value is trusted.
     """
-    fallback = cfg.get("pool", "max")
+    stage_b = cfg.get("stage_b")
+    fb_pool = stage_b.get("pool", "max") if stage_b is not None else cfg.get("pool", "max")
+    fb_hidden = stage_b.get("hidden_dim", 256) if stage_b is not None else 256
     fname = _PENDING_CKPT.get("filename")
     if fname is None:
-        return fallback
+        return fb_pool, fb_hidden
 
     from configs.path_config import MODEL_SAVE_DIR
 
     try:
         ckpt = torch.load(MODEL_SAVE_DIR / fname, map_location="cpu", weights_only=False)
-        saved_in = ckpt["model_state_dict"]["classifier.0.weight"].shape[1]
+        hidden_dim, saved_in = ckpt["model_state_dict"]["classifier.0.weight"].shape
     except (FileNotFoundError, KeyError):
-        return fallback
+        return fb_pool, fb_hidden
 
-    if saved_in == 2 * lstm_hidden and fallback != "concat":
+    pool = fb_pool
+    if saved_in == 2 * lstm_hidden and fb_pool != "concat":
         print("  ⓘ Checkpoint classifier width = 2·lstm_hidden — using pool='concat'.")
-        return "concat"
-    if saved_in == lstm_hidden and fallback == "concat":
+        pool = "concat"
+    elif saved_in == lstm_hidden and fb_pool == "concat":
         print("  ⓘ Checkpoint classifier width = lstm_hidden — using pool='max'.")
-        return "max"
-    return fallback
+        pool = "max"
+
+    if hidden_dim != fb_hidden:
+        print(f"  ⓘ Checkpoint MLP hidden_dim={hidden_dim} overrides cfg ({fb_hidden}).")
+    return pool, int(hidden_dim)
 
 
 def _build_model(baseline_name: str, cfg: DictConfig) -> nn.Module:
@@ -252,21 +262,27 @@ def _build_model(baseline_name: str, cfg: DictConfig) -> nn.Module:
         )
 
     if baseline_name == "baseline5":
-        # Temporal person classifier: frozen person features → shared LSTM
-        # per player → masked pool → head. Built with checkpoint=None; the
-        # saved baseline5 state_dict restores everything including the frozen
-        # extractor. LSTM shape and pool mode are read from the checkpoint.
-        from models.baseline5 import TemporalPersonClassifier
+        # Two-stage temporal person model: evaluation scores the Stage-B
+        # group classifier (checkpoint = baseline5_stage_b_runN.pt), whose
+        # state dict contains the frozen Stage-A model under "person.*".
+        # Built with checkpoint=None; _load_checkpoint restores everything.
+        from models.baseline5 import GroupTemporalClassifier, PersonTemporalLSTM
 
         lstm_hidden, lstm_layers = _detect_lstm_shape(cfg)
-        pool = _detect_b5_pool(lstm_hidden, cfg)
-        return TemporalPersonClassifier(
-            num_classes=NUM_GROUP_ACTIVITIES,
+        pool, head_hidden = _detect_b5_head(lstm_hidden, cfg)
+        person = PersonTemporalLSTM(
+            num_actions=NUM_PERSON_ACTIONS,
             backbone_name=cfg.model.name,
             checkpoint=None,
             lstm_hidden=lstm_hidden,
             lstm_layers=lstm_layers,
             dropout=cfg.get("dropout", 0.3),
+        )
+        return GroupTemporalClassifier(
+            person_model=person,
+            num_classes=NUM_GROUP_ACTIVITIES,
+            hidden_dim=head_hidden,
+            dropout=cfg.stage_b.get("dropout", 0.3),
             pool=pool,
         )
 

@@ -5,60 +5,62 @@ defaults:
 
 # B5 is the heaviest loader configuration: each clip yields n_frames × P
 # crops (9 × ~12 ≈ 108 images). Gradient accumulation keeps the EFFECTIVE
-# batch at 16 (comparable with the other baselines) while only
-# micro_batch_size clips are ever materialized at once — the loader,
-# per-step RAM, and VRAM all scale with the micro batch, not with 16.
-batch_size: 8            # effective batch (optimizer steps at this size)
+# batch at 16 while only micro_batch_size clips are ever materialized at
+# once — loader queues, per-step RAM, and VRAM all scale with the micro batch.
+batch_size: 16            # effective batch (optimizer steps at this size)
 micro_batch_size: 1       # clips per forward/backward; must divide batch_size
 n_frames: 9
 num_workers: 4
+prefetch_factor: 1        # each queued micro-batch is ~260 MB of crop tensors
 pin_memory: false
 data_parallel: true
 
-# Single training stage: the person-feature backbone is frozen —
-# only the per-player LSTM + pooling head train.
-num_epochs: 50
-learning_rate: 1e-3           # SGD lr for the LSTM + classifier head
-weight_decay: 5e-4
-dropout: 0.3                  # MLP head (and between LSTM layers if > 1)
-early_stopping_patience: 10
-
-# Inverse-frequency CE weights for the 8 group-activity classes —
-# same rationale as baseline3/4 (l/r_winpoint ~2.5× rarer).
-class_weighted_loss: true
-label_smoothing: 0.01
-
-# Per-player temporal model: one LSTM shared across players, run over each
-# player's 9-crop feature sequence.
+# Shared per-player LSTM (trained in Stage A, frozen in Stage B).
 lstm:
   hidden_dim: 512
-  num_layers: 1               # bump only if underfitting — every baseline
-                              # so far has overfit, not underfit
+  num_layers: 1
 
-# Aggregation across the player dimension AFTER the per-player LSTMs.
-# "max" is the paper's B5 definition; "concat" (max‖mean, doubles the
-# classifier input) is what worked best for B3's Stage B — worth an ablation.
-# Padded player slots must be excluded via the collate masks in all modes.
-pool: "max"
+dropout: 0.4             # frozen-feature dropout + LSTM-summary dropout
+label_smoothing: 0.01
 
-# MLP head on the pooled player representation.
-classifier:
-  hidden_dim: 256
+# --- Stage A: person-action temporal pretraining (9 classes) ---
+# Frozen person-feature backbone (Baseline 3 Stage A) → shared LSTM over each
+# player's 9-crop sequence → 9-way action head. LSTM + head train.
+stage_a:
+  num_epochs: 50
+  learning_rate: 1e-3
+  weight_decay: 5e-4
+  early_stopping_patience: 10
+  class_weighted_loss: true   # counters the ~68% "standing" majority
 
+# --- Stage B: group-activity head (8 classes) ---
+# Stage A's LSTM is frozen; player summaries are mask-pooled and a small
+# MLP head classifies the group activity. Only the head trains.
+stage_b:
+  num_epochs: 50
+  learning_rate: 1e-3
+  weight_decay: 5e-4
+  hidden_dim: 512             # MLP hidden width
+  dropout: 0.4
+  # Player-dim aggregation: "max" is the course's B5 definition;
+  # "concat" (max‖mean) is what worked best for B3's Stage B.
+  pool: "max"
+  early_stopping_patience: 10
+  class_weighted_loss: true   # l/r_winpoint ~2.5× rarer
+
+# Cosine schedule applies to Stage B's optimizer; Stage A keeps a flat LR
+# (same convention as baseline3).
 lr_scheduler:
   name: CosineAnnealingLR
-  T_max: ${num_epochs}
+  T_max: ${stage_b.num_epochs}
   eta_min: 1e-5
-
-label_names: null   # class metadata comes from configs.labels, not YAML
 
 model:
   # Frozen feature-extractor backbone ("resnet50" or "resnet101").
   name: "resnet50"
-  # B5 is defined on person-action features: load Baseline 3's Stage-A
-  # backbone (trained on player crops for the 9 person actions).
-  # Set null to fall back to ImageNet weights — the run log prints which
-  # weights were actually loaded; verify it before letting a run continue.
+  # B5's spatial features come from Baseline 3's Stage-A person-action
+  # backbone. (NOT stage_b: its backbone weights are identical — frozen
+  # during B3's Stage B — and its extra classifier keys would fail to load.)
   checkpoint: "baseline3_stage_a_run2.pt"
 
 device: cuda
