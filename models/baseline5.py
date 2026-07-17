@@ -129,7 +129,7 @@ class PersonTemporalLSTM(nn.Module):
         """``(N, T, C, H, W)`` player sequences → ``(N, lstm_hidden)`` summaries."""
         N, T, C, H, W = seqs.shape
         
-        feats = self.extractor(seqs.view(N * T, C, H, W))       # (N·T, D)
+        feats = self.extractor(seqs.reshape(N * T, C, H, W))    # (N·T, D)
         feats = self.feature_dropout(feats).view(N, T, -1)      # (N, T, D)
         
         _, (h_n, _) = self.lstm(feats)
@@ -186,6 +186,7 @@ class GroupTemporalClassifier(nn.Module):
             2 * person_model.lstm_hidden if pool == "concat" else person_model.lstm_hidden
         )
         self.classifier = nn.Sequential(
+            nn.Dropout(p=dropout),
             nn.Linear(classifier_in, hidden_dim),
             nn.LayerNorm(hidden_dim),
             nn.ReLU(inplace=True),
@@ -291,7 +292,8 @@ def train_test(cfg: DictConfig) -> None:
     # ── Logging ──────────────────────────────────────────────────────────
     run_log_dir = LOGS_DIR / "baseline5"
     run_log_dir.mkdir(parents=True, exist_ok=True)
-    run_count = len(list(run_log_dir.glob("*.json"))) + 1
+    # run_count = len(list(run_log_dir.glob("*.json"))) + 1
+    run_count = 2 
     run_id = f"run{run_count}"
     writer = SummaryWriter(log_dir=run_log_dir / "tensorboard" / run_id)
     metrics_history: list[dict] = []

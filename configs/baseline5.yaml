@@ -13,7 +13,7 @@ n_frames: 9
 num_workers: 4
 prefetch_factor: 1        # each queued micro-batch is ~260 MB of crop tensors
 pin_memory: false
-data_parallel: true
+data_parallel: false
 
 # Shared per-player LSTM (trained in Stage A, frozen in Stage B).
 lstm:

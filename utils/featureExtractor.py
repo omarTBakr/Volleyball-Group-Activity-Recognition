@@ -72,7 +72,7 @@ class FeatureExtractor(nn.Module):
         else:
             print(f"  [FeatureExtractor] {model_name} using generic ImageNet weights "
                   "(no project checkpoint given)")
-
+        
         backbone.fc = nn.Identity()
         self.backbone = backbone
 
