@@ -292,8 +292,8 @@ def train_test(cfg: DictConfig) -> None:
     # ── Logging ──────────────────────────────────────────────────────────
     run_log_dir = LOGS_DIR / "baseline5"
     run_log_dir.mkdir(parents=True, exist_ok=True)
-    # run_count = len(list(run_log_dir.glob("*.json"))) + 1
-    run_count = 2 
+    run_count = len(list(run_log_dir.glob("*.json"))) + 1
+    # run_count = 2 
     run_id = f"run{run_count}"
     writer = SummaryWriter(log_dir=run_log_dir / "tensorboard" / run_id)
     metrics_history: list[dict] = []
