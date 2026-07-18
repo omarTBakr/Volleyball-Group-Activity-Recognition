@@ -107,7 +107,7 @@ class BaseVolleyballDataset(Dataset):
         self.crop = crop
         self.transform = transform
 
-        self._master_data: dict = load_from_pickle()
+        self._master_data: dict = self._load_master_data()
 
         # The 'persons' detections are never read by the loader (crops come
         # from tracking, with 'actions' as fallback) yet hold ~40% of the
@@ -188,6 +188,18 @@ class BaseVolleyballDataset(Dataset):
             )
 
     # ── Storage hooks (implemented by subclasses) ────────────────────────
+
+    def _load_master_data(self) -> dict:
+        """
+        Return the master annotation dict keyed by ``"video_id/clip_id"``.
+
+        Default implementation reads the pickled master JSON (shared,
+        process-cached). Subclasses may override to build the same
+        structure from another source (e.g. the raw annotation text files
+        on disk — see ``kaggle_data_loader``). Each clip entry must offer
+        ``"scene_class"`` plus per-frame ``"tracking"``/``"actions"``.
+        """
+        return load_from_pickle()
 
     def _load_frame_index(self) -> dict[tuple[str, str], list[str]]:
         """Return ``(video_id, clip_id) -> sorted list of frame filenames``."""

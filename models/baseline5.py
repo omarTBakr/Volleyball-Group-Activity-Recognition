@@ -46,7 +46,11 @@ from configs.labels import (
     PERSON_ACTION_TO_IDX,
 )
 from configs.path_config import LOGS_DIR
-from src.data.kaggle_data_loader import VolleyballDataset, collate_fn
+from src.data.kaggle_data_loader import (
+    VolleyballDataset,
+    collate_fn,
+    free_annotation_cache,
+)
 from src.pickle_dump import free_master_data_cache
 from utils.featureExtractor import FeatureExtractor
 from utils.load_model_config import build_scheduler, build_transforms
@@ -327,10 +331,12 @@ def train_test(cfg: DictConfig) -> None:
     )
 
     # All three datasets have copied what they need into compact records —
-    # release the ~3 GB master annotation dict BEFORE any DataLoader workers
+    # release the master annotation dict BEFORE any DataLoader workers
     # fork, so neither the main process nor the 3 × num_workers forked
     # workers carry (and gradually copy-on-write duplicate) it. This is what
     # kept Kaggle at the RAM ceiling regardless of batch/micro-batch size.
+    # Both caches are covered: the disk-built one and the pickle fallback.
+    free_annotation_cache()
     free_master_data_cache()
     gc.collect()
 

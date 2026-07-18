@@ -1,10 +1,18 @@
 """
 Kaggle-specific volleyball dataset loader — identical interface to
-data_loader.py but reads frames directly from disk instead of LMDB.
+data_loader.py but reads frames AND annotations directly from disk.
 
 Use this on Kaggle where /kaggle/working/ lacks the space to build
 the LMDB (~50 GB). Frames are served straight from the read-only
 input mount at MAIN_DATASET_DIR, which is already on a fast SSD.
+
+Annotations are parsed straight from the raw text files (tracking,
+action detections, per-video annotations.txt) into the same master-dict
+structure the pickle held — no volleyball_master.json / pickle needed.
+Skipping the pickle avoids materializing its unused "persons" detections
+(~1.2 GB) and works out of the box on a fresh Kaggle mount. If the
+annotation directories are missing, the loader transparently falls back
+to the pickle, so existing setups keep working.
 
 Drop-in replacement: just change the import in your training script:
 
@@ -20,15 +28,109 @@ supplies the direct-from-disk storage backend.
 
 from __future__ import annotations
 
-from collections.abc import Callable
+import logging
+from collections.abc import Callable, Iterator
 from pathlib import Path
 
 from PIL import Image
 
-from configs.path_config import MAIN_DATASET_DIR
+from configs.path_config import (
+    MAIN_DATASET_DIR,
+    VOLLEYBALL_ANNOTATIONS_DIR,
+    VOLLEYBALL_DETECTION_DIR,
+    VOLLEYBALL_TRACKING_DIR,
+)
 from src.data.base_dataset import BaseVolleyballDataset, collate_fn
+from src.json_parser import (
+    parse_detection_file,
+    parse_scene_annotations,
+    parse_tracking_file,
+)
+from src.pickle_dump import load_from_pickle
 
-__all__ = ["VolleyballDataset", "collate_fn"]
+logger = logging.getLogger(__name__)
+
+__all__ = ["VolleyballDataset", "collate_fn", "free_annotation_cache"]
+
+# ── Disk-direct annotation index ─────────────────────────────────────────────
+#
+# Built once per process and shared by the train/val/test datasets, exactly
+# like the pickle cache it replaces. Mirrors json_parser.create_master_json +
+# enrich_with_scene_labels, minus the never-used "persons" detections.
+
+_ANNOTATION_CACHE: dict | None = None
+
+
+def _iter_clip_dirs(root: Path) -> Iterator[tuple[str, str]]:
+    """Yield ``(video_id, clip_id)`` for every clip folder under root."""
+    for video_dir in sorted(root.iterdir()):
+        if not video_dir.is_dir():
+            continue
+        for clip_dir in sorted(video_dir.iterdir()):
+            if clip_dir.is_dir():
+                yield video_dir.name, clip_dir.name
+
+
+def _build_annotations_from_disk() -> dict:
+    """
+    Parse the raw annotation text files into a master dict keyed by
+    ``"video_id/clip_id"``, matching the pickle's structure per clip:
+    ``{"actions": {...}, "tracking": {...}, "scene_class": str | None}``.
+    """
+    global _ANNOTATION_CACHE
+    if _ANNOTATION_CACHE is not None:
+        return _ANNOTATION_CACHE
+
+    # Clip enumeration follows json_parser.create_master_json (detection
+    # dir); tracking dir is an equivalent fallback with the same layout.
+    if VOLLEYBALL_DETECTION_DIR.is_dir():
+        enum_root = VOLLEYBALL_DETECTION_DIR
+    elif VOLLEYBALL_TRACKING_DIR.is_dir():
+        enum_root = VOLLEYBALL_TRACKING_DIR
+    else:
+        raise FileNotFoundError(
+            "Neither annotation source exists: "
+            f"{VOLLEYBALL_DETECTION_DIR} nor {VOLLEYBALL_TRACKING_DIR}",
+        )
+
+    # Scene labels stay scoped per video — frame names collide across videos.
+    scene_labels: dict[str, dict[str, str]] = {}
+    if VOLLEYBALL_ANNOTATIONS_DIR.is_dir():
+        for video_folder in sorted(VOLLEYBALL_ANNOTATIONS_DIR.iterdir()):
+            if video_folder.is_dir():
+                scene_labels[video_folder.name] = parse_scene_annotations(
+                    video_folder / "annotations.txt",
+                )
+
+    master: dict[str, dict] = {}
+    for video_id, clip_id in _iter_clip_dirs(enum_root):
+        actions = (
+            parse_detection_file(
+                VOLLEYBALL_DETECTION_DIR / video_id / clip_id / "action_detections.txt",
+            )
+            if VOLLEYBALL_DETECTION_DIR.is_dir() else {}
+        )
+        master[f"{video_id}/{clip_id}"] = {
+            "actions": actions,
+            "tracking": parse_tracking_file(
+                VOLLEYBALL_TRACKING_DIR / video_id / clip_id / f"{clip_id}.txt",
+            ),
+            "scene_class": scene_labels.get(video_id, {}).get(f"{clip_id}.jpg"),
+        }
+
+    logger.info("Built annotation index from disk: %d clips.", len(master))
+    _ANNOTATION_CACHE = master
+    return master
+
+
+def free_annotation_cache() -> None:
+    """
+    Drop the disk-built annotation cache (analog of
+    ``pickle_dump.free_master_data_cache``). Call after every dataset is
+    constructed, before DataLoader workers fork.
+    """
+    global _ANNOTATION_CACHE
+    _ANNOTATION_CACHE = None
 
 # ── Frame index ──────────────────────────────────────────────────────────────
 
@@ -99,6 +201,17 @@ class VolleyballDataset(BaseVolleyballDataset):
             mode=mode, n_frames=n_frames, full_image=full_image,
             crop=crop, transform=transform,
         )
+
+    def _load_master_data(self) -> dict:
+        """Build annotations straight from disk; fall back to the pickle."""
+        try:
+            return _build_annotations_from_disk()
+        except FileNotFoundError as e:
+            logger.warning(
+                "Raw annotation dirs unavailable (%s) — falling back to the "
+                "master pickle.", e,
+            )
+            return load_from_pickle()
 
     def _load_frame_index(self) -> dict[tuple[str, str], list[str]]:
         return _build_frame_index(self.dataset_dir)
