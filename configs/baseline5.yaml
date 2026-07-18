@@ -44,7 +44,8 @@ stage_b:
   dropout: 0.4
   # Player-dim aggregation: "max" is the course's B5 definition;
   # "concat" (max‖mean) is what worked best for B3's Stage B.
-  pool: "max"
+  # pool: "max" # tried it and gives poor results 
+  pool: "concat" 
   early_stopping_patience: 10
   class_weighted_loss: true   # l/r_winpoint ~2.5× rarer
 
