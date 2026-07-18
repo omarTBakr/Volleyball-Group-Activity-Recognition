@@ -29,6 +29,7 @@ from __future__ import annotations
 import os
 os.environ["MPLBACKEND"] = "Agg"
 
+import gc
 import json
 
 import hydra
@@ -46,6 +47,7 @@ from configs.labels import (
 )
 from configs.path_config import LOGS_DIR
 from src.data.kaggle_data_loader import VolleyballDataset, collate_fn
+from src.pickle_dump import free_master_data_cache
 from utils.featureExtractor import FeatureExtractor
 from utils.load_model_config import build_scheduler, build_transforms
 from utils.utility import (
@@ -323,6 +325,14 @@ def train_test(cfg: DictConfig) -> None:
     test_dataset = VolleyballDataset(
         mode="test", full_image=False, crop=True, n_frames=cfg.n_frames, transform=tf["test"],
     )
+
+    # All three datasets have copied what they need into compact records —
+    # release the ~3 GB master annotation dict BEFORE any DataLoader workers
+    # fork, so neither the main process nor the 3 × num_workers forked
+    # workers carry (and gradually copy-on-write duplicate) it. This is what
+    # kept Kaggle at the RAM ceiling regardless of batch/micro-batch size.
+    free_master_data_cache()
+    gc.collect()
 
     loader_kwargs = dict(
         batch_size=micro_batch,

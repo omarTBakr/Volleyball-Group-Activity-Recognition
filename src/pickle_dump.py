@@ -35,6 +35,24 @@ def dump_to_pickle() -> None:
 _MASTER_DATA_CACHE: dict | None = None
 
 
+def free_master_data_cache() -> None:
+    """
+    Drop the cached master dict so its ~3 GB of Python objects can be
+    garbage-collected.
+
+    Call this AFTER every dataset has been constructed (datasets copy what
+    they need into compact per-sample records at init time). Freeing it
+    before DataLoader workers fork matters twice: the main process sheds
+    the dict, and — more importantly — workers never inherit millions of
+    live objects whose refcount churn would gradually copy-on-write
+    duplicate the dict into every worker.
+
+    A later load_from_pickle() call transparently reloads from disk.
+    """
+    global _MASTER_DATA_CACHE
+    _MASTER_DATA_CACHE = None
+
+
 def load_from_pickle() -> dict:
     """
     Load and return the dictionary from the dumped pickle file.

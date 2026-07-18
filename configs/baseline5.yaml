@@ -5,13 +5,15 @@ defaults:
 
 # B5 is the heaviest loader configuration: each clip yields n_frames × P
 # crops (9 × ~12 ≈ 108 images). Gradient accumulation keeps the EFFECTIVE
-# batch at 16 while only micro_batch_size clips are ever materialized at
-# once — loader queues, per-step RAM, and VRAM all scale with the micro batch.
-batch_size: 4          # effective batch (optimizer steps at this size)
-micro_batch_size: 1       # clips per forward/backward; must divide batch_size
+# batch at batch_size while only micro_batch_size clips are ever
+# materialized at once — loader queues, per-step RAM, and VRAM all scale
+# with the micro batch. RAM budget (after the master-dict fix): a 2-clip
+# micro-batch is ~130 MB, so 2 workers × prefetch 2 ≈ 520 MB queued.
+batch_size: 8             # effective/macro batch (optimizer steps at this size)
+micro_batch_size: 2       # clips per forward/backward; must divide batch_size
 n_frames: 9
-num_workers: 4
-prefetch_factor: 1        # each queued micro-batch is ~260 MB of crop tensors
+num_workers: 2
+prefetch_factor: 2
 pin_memory: false
 data_parallel: false
 

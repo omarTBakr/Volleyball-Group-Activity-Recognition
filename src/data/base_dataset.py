@@ -130,6 +130,30 @@ class BaseVolleyballDataset(Dataset):
         self._records: list[tuple] = []
         self._precompute_records()
 
+        # After precompute, nothing in this object needs the multi-GB master
+        # dict anymore. Swap each sample's clip_data for a slim stand-in that
+        # keeps exactly what external consumers (the label-count helpers in
+        # utils.utility) read, and drop our reference to the dict itself so
+        # callers can free the process-wide cache (see
+        # src.pickle_dump.free_master_data_cache) before workers fork.
+        self._slim_samples()
+        self._master_data = {}
+
+    def _slim_samples(self) -> None:
+        """Replace clip_data refs with minimal dicts (scene_class + middle frame)."""
+        slim_samples: list[tuple[str, str, dict]] = []
+        for video_id, clip_id, clip_data in self.samples:
+            middle_name = f"{clip_id}.jpg"
+            slim: dict = {"scene_class": clip_data.get("scene_class")}
+            tracking_mid = clip_data.get("tracking", {}).get(middle_name)
+            if tracking_mid is not None:
+                slim["tracking"] = {middle_name: tracking_mid}
+            actions_mid = clip_data.get("actions", {}).get(middle_name)
+            if actions_mid is not None:
+                slim["actions"] = {middle_name: actions_mid}
+            slim_samples.append((video_id, clip_id, slim))
+        self.samples = slim_samples
+
     def _precompute_records(self) -> None:
         """Resolve labels, frame selection, and person boxes per sample."""
         for video_id, clip_id, clip_data in self.samples:
