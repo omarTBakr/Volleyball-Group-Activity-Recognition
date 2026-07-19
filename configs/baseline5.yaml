@@ -9,20 +9,20 @@ defaults:
 # materialized at once — loader queues, per-step RAM, and VRAM all scale
 # with the micro batch. RAM budget (after the master-dict fix): a 2-clip
 # micro-batch is ~130 MB, so 2 workers × prefetch 2 ≈ 520 MB queued.
-batch_size: 16            # effective/macro batch (optimizer steps at this size)
+batch_size: 4            # effective/macro batch (optimizer steps at this size)
 micro_batch_size: 2       # clips per forward/backward; must divide batch_size
 n_frames: 9
-num_workers: 0
+num_workers: 4
 prefetch_factor: 2
 pin_memory: false
 data_parallel: false
 
 # Shared per-player LSTM (trained in Stage A, frozen in Stage B).
 lstm:
-  hidden_dim: 512
+  hidden_dim: 3072
   num_layers: 1
 
-dropout: 0.3             # frozen-feature dropout + LSTM-summary dropout
+dropout: 0.2             # frozen-feature dropout + LSTM-summary dropout
 label_smoothing: 0.01
 
 # --- Stage A: person-action temporal pretraining (9 classes) ---
@@ -42,8 +42,8 @@ stage_b:
   num_epochs: 50
   learning_rate: 1e-3
   weight_decay: 5e-4
-  hidden_dim: 512             # MLP hidden width
-  dropout: 0.4
+  hidden_dim: 3072             # MLP hidden width
+  dropout: 0.2
   # Player-dim aggregation: "max" is the course's B5 definition;
   # "concat" (max‖mean) is what worked best for B3's Stage B.
   # pool: "max" # tried it and gives poor results 

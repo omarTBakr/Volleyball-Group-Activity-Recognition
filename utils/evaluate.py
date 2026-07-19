@@ -14,6 +14,7 @@ Usage
 from __future__ import annotations
 
 import argparse
+import re
 import sys
 from typing import Any
 
@@ -63,6 +64,24 @@ CLASS_NAMES: list[str] = [
 # ═════════════════════════════════════════════════════════════════════════════
 
 
+def _first_classifier_linear(state: dict[str, Any]) -> torch.Size:
+    """Shape ``(hidden_dim, classifier_in)`` of the classifier's first Linear.
+
+    Not hardcoded to ``classifier.0.weight``: the index of the first Linear
+    depends on whether the checkpoint predates the leading ``nn.Dropout`` (see
+    ``remap_sequential_indices``). The first *2-D* ``classifier.N.weight`` is the
+    first Linear — LayerNorm weights are 1-D.
+    """
+    linears = [
+        k
+        for k in state
+        if re.fullmatch(r"classifier\.\d+\.weight", k) and state[k].dim() == 2
+    ]
+    if not linears:
+        raise KeyError("no 2-D classifier.*.weight in checkpoint")
+    return state[min(linears, key=lambda k: int(k.split(".")[1]))].shape
+
+
 def _detect_stage_b_pool(feature_dim: int, cfg: DictConfig) -> str:
     """Infer the right GroupActivityModel pool mode for a saved checkpoint.
 
@@ -92,7 +111,7 @@ def _detect_stage_b_pool(feature_dim: int, cfg: DictConfig) -> str:
 
     try:
         ckpt = torch.load(MODEL_SAVE_DIR / fname, map_location="cpu", weights_only=False)
-        saved_in = ckpt["model_state_dict"]["classifier.0.weight"].shape[1]
+        saved_in = _first_classifier_linear(ckpt["model_state_dict"])[1]
     except (FileNotFoundError, KeyError):
         return fallback
 
@@ -165,7 +184,7 @@ def _detect_lstm_shape(cfg: DictConfig) -> tuple[int, int]:
 def _detect_b5_head(lstm_hidden: int, cfg: DictConfig) -> tuple[str, int]:
     """Infer baseline5's (pool mode, MLP hidden width) from the checkpoint.
 
-    ``classifier.0.weight`` has shape ``(hidden_dim, classifier_in)`` where
+    The classifier's first Linear has shape ``(hidden_dim, classifier_in)`` where
     ``classifier_in`` is ``lstm_hidden`` for max/mean pooling and
     ``2·lstm_hidden`` for concat. max and mean share a width, so between
     those two the YAML value is trusted.
@@ -181,7 +200,7 @@ def _detect_b5_head(lstm_hidden: int, cfg: DictConfig) -> tuple[str, int]:
 
     try:
         ckpt = torch.load(MODEL_SAVE_DIR / fname, map_location="cpu", weights_only=False)
-        hidden_dim, saved_in = ckpt["model_state_dict"]["classifier.0.weight"].shape
+        hidden_dim, saved_in = _first_classifier_linear(ckpt["model_state_dict"])
     except (FileNotFoundError, KeyError):
         return fb_pool, fb_hidden
 
@@ -350,9 +369,16 @@ def _batch_unpack_for(baseline_name: str) -> BatchUnpack:
 
 
 def _build_test_loader(
-    cfg: DictConfig, dataset_kwargs: dict[str, Any]
+    cfg: DictConfig,
+    dataset_kwargs: dict[str, Any],
+    batch_size: int | None = None,
 ) -> DataLoader:
-    """Build and return the test-split ``DataLoader``."""
+    """Build and return the test-split ``DataLoader``.
+
+    ``batch_size`` overrides the config's value when given — eval VRAM needs
+    differ from training's (no gradient accumulation shrinks the per-step
+    footprint here), so the right eval batch is not the training batch.
+    """
     transforms_dict = build_transforms(cfg)
 
     test_dataset = VolleyballDataset(
@@ -362,7 +388,7 @@ def _build_test_loader(
     )
     return DataLoader(
         test_dataset,
-        batch_size=cfg.get("batch_size", 64),
+        batch_size=batch_size or cfg.get("batch_size", 64),
         shuffle=False,
         num_workers=cfg.get("num_workers", 4),
         collate_fn=collate_fn,
@@ -502,7 +528,12 @@ def _generate_plots(
 # ═════════════════════════════════════════════════════════════════════════════
 
 
-def evaluate(model_filename: str, baseline_name: str) -> None:
+def evaluate(
+    model_filename: str,
+    baseline_name: str,
+    device: str = "cuda",
+    batch_size: int | None = None,
+) -> None:
     """Evaluate a saved checkpoint and generate all metric plots.
 
     Parameters
@@ -513,8 +544,15 @@ def evaluate(model_filename: str, baseline_name: str) -> None:
         Baseline identifier — used to select the model architecture,
         load the matching Hydra config, and name the output sub-folder
         under ``plots/``.
+    device : str
+        ``"cuda"`` or ``"cpu"``. Defaults to ``"cuda"``, which (via
+        ``get_device``) still falls back to CPU when no working GPU
+        exists; pass ``"cpu"`` to force CPU even when a GPU is present.
+    batch_size : int or None
+        Test-loader batch size; ``None`` (default) uses the baseline
+        config's value. Lower it when eval OOMs on the available GPU.
     """
-    device = get_device()
+    device = get_device(device)
 
     # ── Config ────────────────────────────────────────────────────────
     configs_dir = str(BASE_DIR / "configs")
@@ -534,7 +572,7 @@ def evaluate(model_filename: str, baseline_name: str) -> None:
 
     dataset_kwargs = _dataset_kwargs_for(baseline_name, cfg)
     batch_unpack = _batch_unpack_for(baseline_name)
-    test_loader = _build_test_loader(cfg, dataset_kwargs)
+    test_loader = _build_test_loader(cfg, dataset_kwargs, batch_size=batch_size)
 
     model = _load_checkpoint(model, model_filename, device)
 
@@ -569,6 +607,21 @@ if __name__ == "__main__":
         default="baseline1",
         help="Baseline identifier (defaults to 'baseline1')",
     )
+    parser.add_argument(
+        "--device",
+        type=str,
+        default="cuda",
+        choices=["cuda", "cpu"],
+        help="Compute device: 'cuda' (default; falls back to CPU if no "
+             "working GPU) or 'cpu' to force CPU evaluation.",
+    )
+    parser.add_argument(
+        "--batch-size",
+        type=int,
+        default=None,
+        help="Test-loader batch size (default: the baseline config's value). "
+             "Lower it if evaluation runs out of GPU memory.",
+    )
     args = parser.parse_args()
 
-    evaluate(args.model, args.baseline)
+    evaluate(args.model, args.baseline, device=args.device, batch_size=args.batch_size)

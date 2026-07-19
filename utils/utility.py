@@ -8,6 +8,8 @@ all baseline scripts.  Visualization helpers have been moved to
 
 from __future__ import annotations
 
+from collections.abc import Iterable
+
 import numpy as np
 import torch     # ty:ignore[import]  # ty:ignore[unresolved-import]
 from sklearn.metrics import accuracy_score, confusion_matrix, f1_score
@@ -96,6 +98,79 @@ def save_model(
     torch.save(checkpoint, save_path)
 
 
+def _sequential_param_indices(prefix: str, keys: Iterable[str]) -> list[int]:
+    """Ordered indices of the parameterized children of an nn.Sequential.
+
+    ``prefix`` is the dotted path to the Sequential (e.g. ``"classifier."``);
+    ``keys`` are state_dict keys. ``"classifier.1.weight"`` contributes ``1``.
+    """
+    found = set()
+    for key in keys:
+        if not key.startswith(prefix):
+            continue
+        head = key[len(prefix):].split(".", 1)[0]
+        if head.isdigit():
+            found.add(int(head))
+    return sorted(found)
+
+
+def remap_sequential_indices(
+    state_dict: dict[str, torch.Tensor], model: nn.Module
+) -> dict[str, torch.Tensor]:
+    """Realign checkpoint keys after a parameterless layer moved inside a Sequential.
+
+    ``nn.Sequential`` names its children by position, so inserting or removing a
+    Dropout/ReLU renumbers every layer after it and breaks ``load_state_dict``
+    against older checkpoints — even though the trained weights are unchanged.
+    (This bit baseline5: commit f3befa2 added a leading ``nn.Dropout`` to
+    ``GroupTemporalClassifier.classifier``, shifting 0/1/4/5/8 → 1/2/5/6/9.)
+
+    For each Sequential in *model*, the parameterized children are matched to the
+    checkpoint's in order. Remapping is applied only when the counts agree and
+    every paired tensor has a matching shape, so a genuine architecture change
+    still surfaces as a normal load error rather than being silently reshuffled.
+    """
+    target = model.state_dict()
+    remapped = dict(state_dict)
+
+    for name, module in model.named_modules():
+        if not isinstance(module, nn.Sequential):
+            continue
+        prefix = f"{name}." if name else ""
+        # Read from `remapped`, not `state_dict`: named_modules yields a parent
+        # Sequential before its children (ResNet's layer1 / layer1.0.downsample),
+        # so a child's keys may already have been renumbered by its parent's pass.
+        model_idx = _sequential_param_indices(prefix, target)
+        ckpt_idx = _sequential_param_indices(prefix, remapped)
+        if model_idx == ckpt_idx or len(model_idx) != len(ckpt_idx):
+            continue
+
+        pairs = {old: new for old, new in zip(ckpt_idx, model_idx)}
+        moved = {}
+        for key in list(remapped):
+            if not key.startswith(prefix):
+                continue
+            head, _, rest = key[len(prefix):].partition(".")
+            if not head.isdigit():
+                continue
+            new_key = f"{prefix}{pairs[int(head)]}.{rest}"
+            if new_key not in target or target[new_key].shape != remapped[key].shape:
+                moved = None
+                break
+            moved[key] = new_key
+
+        if not moved:
+            continue  # shapes disagree — let load_state_dict report the real mismatch
+
+        # Rebuild rather than reassign in place: the shifts overlap (0→1 would
+        # clobber the not-yet-moved key 1), so renames cannot be applied serially.
+        remapped = {moved.get(k, k): v for k, v in remapped.items()}
+        shifts = ", ".join(f"{o}→{n}" for o, n in pairs.items() if o != n)
+        print(f"  ⓘ Remapped legacy '{prefix}' checkpoint indices ({shifts}).")
+
+    return remapped
+
+
 def load_model(
     model_name: str,
     model: nn.Module,
@@ -119,9 +194,14 @@ def load_model(
         ``(model, optimizer, epoch, loss, class_to_idx)``
 
     """
-    checkpoint = torch.load(MODEL_SAVE_DIR / model_name, weights_only=False)
+    # map_location="cpu": checkpoints are saved from CUDA tensors, and must
+    # stay loadable on CPU-only hosts. load_state_dict then copies onto
+    # whatever device the caller's model already lives on.
+    checkpoint = torch.load(
+        MODEL_SAVE_DIR / model_name, map_location="cpu", weights_only=False,
+    )
 
-    model.load_state_dict(checkpoint["model_state_dict"])
+    model.load_state_dict(remap_sequential_indices(checkpoint["model_state_dict"], model))
 
     if optimizer is not None and "optimizer_state_dict" in checkpoint:
         optimizer.load_state_dict(checkpoint["optimizer_state_dict"])

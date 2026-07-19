@@ -45,7 +45,7 @@ from configs.labels import (
     NUM_PERSON_ACTIONS,
     PERSON_ACTION_TO_IDX,
 )
-from configs.path_config import LOGS_DIR
+from configs.path_config import LOGS_DIR, MODEL_SAVE_DIR
 from src.data.kaggle_data_loader import (
     VolleyballDataset,
     collate_fn,
@@ -134,10 +134,10 @@ class PersonTemporalLSTM(nn.Module):
     def forward_summaries(self, seqs: torch.Tensor) -> torch.Tensor:
         """``(N, T, C, H, W)`` player sequences → ``(N, lstm_hidden)`` summaries."""
         N, T, C, H, W = seqs.shape
-        
+
         feats = self.extractor(seqs.reshape(N * T, C, H, W))    # (N·T, D)
         feats = self.feature_dropout(feats).view(N, T, -1)      # (N, T, D)
-        
+
         _, (h_n, _) = self.lstm(feats)
         return h_n[-1]                                          # (N, H)
 
@@ -286,7 +286,53 @@ def temporal_crop_unpack(batch):
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# ══ 3. MAIN ENTRYPOINT ══
+# ══ 3. CHECKPOINT-ARCHITECTURE INFERENCE ══
+# ═════════════════════════════════════════════════════════════════════════════
+#
+# Reloads build models from the CHECKPOINT's dimensions, not the config's:
+# hyperparameters (lstm.hidden_dim, stage_b.hidden_dim, pool) routinely
+# change between iterations, and an already-trained run must keep loading
+# regardless of what the yaml says today.
+
+
+def _checkpoint_state(ckpt_name: str) -> dict:
+    """Return the model state dict stored in a saved checkpoint."""
+    ckpt = torch.load(MODEL_SAVE_DIR / ckpt_name, map_location="cpu", weights_only=False)
+    return ckpt.get("model_state_dict", ckpt)
+
+
+def _person_dims(state: dict, prefix: str = "") -> tuple[int, int]:
+    """``(lstm_hidden, lstm_layers)`` as stored in a PersonTemporalLSTM state."""
+    hidden = state[f"{prefix}lstm.weight_hh_l0"].shape[1]
+    stem = f"{prefix}lstm.weight_ih_l"
+    layers = sum(1 for k in state if k.startswith(stem) and k[len(stem):].isdigit())
+    return int(hidden), layers
+
+
+def _group_dims(state: dict, cfg_pool: str) -> tuple[int, str]:
+    """``(hidden_dim, pool)`` consistent with a GroupTemporalClassifier state.
+
+    ``hidden_dim`` is the first classifier Linear's out_features. The pool
+    is recovered from that Linear's in_features: 2×lstm_hidden ⇒ "concat".
+    "max" and "mean" are indistinguishable by shape, so the config's choice
+    is kept when it names one of those two, else "max".
+    """
+    lstm_hidden, _ = _person_dims(state, prefix="person.")
+    linears = sorted(
+        (int(k.split(".")[1]), k)
+        for k, v in state.items()
+        if k.startswith("classifier.") and k.endswith(".weight") and v.dim() == 2
+    )
+    hidden_dim, classifier_in = state[linears[0][1]].shape
+    if classifier_in == 2 * lstm_hidden:
+        pool = "concat"
+    else:
+        pool = cfg_pool if cfg_pool in ("max", "mean") else "max"
+    return int(hidden_dim), pool
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# ══ 4. MAIN ENTRYPOINT ══
 # ═════════════════════════════════════════════════════════════════════════════
 
 
@@ -349,6 +395,7 @@ def train_test(cfg: DictConfig) -> None:
     if cfg.num_workers > 0:
         # Each queued micro-batch is ~260 MB of crop tensors in shared memory.
         loader_kwargs["prefetch_factor"] = cfg.get("prefetch_factor", 1)
+
     train_loader = DataLoader(train_dataset, shuffle=True, drop_last=True, **loader_kwargs)
     val_loader = DataLoader(val_dataset, shuffle=False, **loader_kwargs)
     test_loader = DataLoader(test_dataset, shuffle=False, **loader_kwargs)
@@ -467,12 +514,22 @@ def train_test(cfg: DictConfig) -> None:
     print(f"{'='*60}")
 
     # Reload best Stage-A weights so B always starts from the best checkpoint.
+    # LSTM dimensions come from the checkpoint itself (see section 3) — the
+    # config may have been retuned since that Stage A was trained.
+    state_a = _checkpoint_state(stage_a_ckpt)
+    lstm_hidden_a, lstm_layers_a = _person_dims(state_a)
+    if (lstm_hidden_a, lstm_layers_a) != (cfg.lstm.hidden_dim, cfg.lstm.num_layers):
+        print(
+            f"  ⚠ Config LSTM ({cfg.lstm.hidden_dim}×{cfg.lstm.num_layers}) ≠ "
+            f"checkpoint '{stage_a_ckpt}' ({lstm_hidden_a}×{lstm_layers_a}) — "
+            "using the checkpoint's dimensions.",
+        )
     reloaded = PersonTemporalLSTM(
         num_actions=NUM_PERSON_ACTIONS,
         backbone_name=cfg.model.name,
         checkpoint=None,
-        lstm_hidden=cfg.lstm.hidden_dim,
-        lstm_layers=cfg.lstm.num_layers,
+        lstm_hidden=lstm_hidden_a,
+        lstm_layers=lstm_layers_a,
         dropout=cfg.get("dropout", 0.3),
     ).to(device)
     reloaded, _, _, _, _ = load_model(stage_a_ckpt, reloaded)
@@ -571,21 +628,32 @@ def train_test(cfg: DictConfig) -> None:
                 break
 
     # ── Test best Stage-B model ──────────────────────────────────────────
+    # Rebuilt from the SAVED checkpoint's architecture: within this run the
+    # Stage-A reload above may already differ from the config, and the same
+    # holds when testing a checkpoint from an older iteration.
     print("\n--- Testing best Stage-B model ---")
+    state_b = _checkpoint_state(stage_b_ckpt)
+    lstm_hidden_b, lstm_layers_b = _person_dims(state_b, prefix="person.")
+    hidden_b, pool_b = _group_dims(state_b, stage_b_cfg.get("pool", "max"))
+    if pool_b != stage_b_cfg.get("pool", "max"):
+        print(
+            f"  ⚠ Config pool '{stage_b_cfg.get('pool', 'max')}' is incompatible with "
+            f"checkpoint '{stage_b_ckpt}' — using '{pool_b}'.",
+        )
     fresh_person = PersonTemporalLSTM(
         num_actions=NUM_PERSON_ACTIONS,
         backbone_name=cfg.model.name,
         checkpoint=None,
-        lstm_hidden=cfg.lstm.hidden_dim,
-        lstm_layers=cfg.lstm.num_layers,
+        lstm_hidden=lstm_hidden_b,
+        lstm_layers=lstm_layers_b,
         dropout=cfg.get("dropout", 0.3),
     ).to(device)
     best_group = GroupTemporalClassifier(
         person_model=fresh_person,
         num_classes=NUM_GROUP_ACTIVITIES,
-        hidden_dim=stage_b_cfg.get("hidden_dim", 256),
+        hidden_dim=hidden_b,
         dropout=stage_b_cfg.get("dropout", 0.3),
-        pool=stage_b_cfg.get("pool", "max"),
+        pool=pool_b,
     ).to(device)
     best_group, _, _, _, _ = load_model(stage_b_ckpt, best_group)
     if use_dp:
