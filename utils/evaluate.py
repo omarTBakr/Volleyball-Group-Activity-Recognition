@@ -296,6 +296,9 @@ def _build_model(baseline_name: str, cfg: DictConfig) -> nn.Module:
             lstm_hidden=lstm_hidden,
             lstm_layers=lstm_layers,
             dropout=cfg.get("dropout", 0.3),
+            # Skip the ImageNet init — _load_checkpoint restores every
+            # weight (incl. the extractor backbone) from the Stage-B ckpt.
+            pretrained_backbone=False,
         )
         return GroupTemporalClassifier(
             person_model=person,

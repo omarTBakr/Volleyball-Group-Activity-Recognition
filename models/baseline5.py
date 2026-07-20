@@ -95,6 +95,10 @@ class PersonTemporalLSTM(nn.Module):
         Number of stacked LSTM layers (dropout applies between layers).
     dropout : float
         Dropout on the frozen features and the LSTM summary.
+    pretrained_backbone : bool
+        Only consulted when ``checkpoint`` is None. ``False`` leaves the
+        extractor randomly initialized — for callers that immediately
+        restore the whole model from a saved checkpoint (evaluation).
 
     """
 
@@ -106,11 +110,15 @@ class PersonTemporalLSTM(nn.Module):
         lstm_hidden: int = 512,
         lstm_layers: int = 1,
         dropout: float = 0.3,
+        pretrained_backbone: bool = True,
     ) -> None:
         super().__init__()
 
         # Frozen — stays in eval mode and produces no-grad features.
-        self.extractor = FeatureExtractor(model_name=backbone_name, checkpoint=checkpoint)
+        self.extractor = FeatureExtractor(
+            model_name=backbone_name, checkpoint=checkpoint,
+            pretrained=pretrained_backbone,
+        )
         self.feature_dropout = nn.Dropout(p=dropout)
 
         self.lstm_hidden = lstm_hidden

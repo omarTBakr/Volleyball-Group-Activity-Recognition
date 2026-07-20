@@ -49,10 +49,21 @@ class FeatureExtractor(nn.Module):
         ``utils.utility.save_model``). Loads the backbone weights from it,
         e.g. Baseline 1's fine-tuned ResNet. ``None`` → ImageNet weights
         (``Weights.DEFAULT``, same as the training scripts).
+    pretrained : bool
+        Only consulted when ``checkpoint`` is None. ``False`` skips the
+        ImageNet download and leaves the backbone randomly initialized —
+        for callers that restore every weight from a full-model checkpoint
+        right after construction (e.g. utils.evaluate), where loading
+        ImageNet weights would be wasted work.
 
     """
 
-    def __init__(self, model_name: str = "resnet50", checkpoint: str | None = None) -> None:
+    def __init__(
+        self,
+        model_name: str = "resnet50",
+        checkpoint: str | None = None,
+        pretrained: bool = True,
+    ) -> None:
         super().__init__()
 
         if model_name not in _SUPPORTED_BACKBONES:
@@ -61,7 +72,10 @@ class FeatureExtractor(nn.Module):
                 f"Choose from {sorted(_SUPPORTED_BACKBONES)}.",
             )
 
-        weights = None if checkpoint else _SUPPORTED_BACKBONES[model_name].DEFAULT
+        weights = (
+            _SUPPORTED_BACKBONES[model_name].DEFAULT
+            if pretrained and not checkpoint else None
+        )
         backbone = getattr(models, model_name)(weights=weights)
 
         self.feature_dim = backbone.fc.in_features
@@ -69,9 +83,12 @@ class FeatureExtractor(nn.Module):
         if checkpoint:
             self._load_backbone_from_checkpoint(backbone, checkpoint)
             print(f"  [FeatureExtractor] {model_name} weights loaded from checkpoint: {checkpoint}")
-        else:
+        elif pretrained:
             print(f"  [FeatureExtractor] {model_name} using generic ImageNet weights "
                   "(no project checkpoint given)")
+        else:
+            print(f"  [FeatureExtractor] {model_name} left uninitialized — "
+                  "weights expected from a full-model checkpoint load")
         
         backbone.fc = nn.Identity()
         self.backbone = backbone
