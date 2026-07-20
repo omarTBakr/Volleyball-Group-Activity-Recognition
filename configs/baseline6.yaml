@@ -1,0 +1,74 @@
+defaults:
+  - _self_
+  # Crop-specific pipeline: warps tall player crops straight to 224×224.
+  - transforms: crop_transforms.yaml
+
+# B6 shares B5's crop-mode data pipeline.  Each clip yields n_frames × P
+# crops (9 × ~12 ≈ 108 images).  Gradient accumulation keeps the EFFECTIVE
+# batch at batch_size while only micro_batch_size clips are ever
+# materialized at once.
+batch_size: 8           # effective/macro batch (optimizer steps at this size)
+micro_batch_size: 4      # clips per forward/backward; must divide batch_size
+n_frames: 9
+num_workers: 4
+prefetch_factor: 2
+pin_memory: false
+data_parallel: false
+
+# ── Stage-A person LSTM ──────────────────────────────────────────────────────
+# B6 key change: LSTM output + a linear projection of raw backbone features
+# are concatenated along the time axis (skip connection) and collapsed via
+# a two-stage Conv1d into a lstm_hidden//4 summary vector.
+lstm:
+  hidden_dim: 512        # lstm_hidden; summary dim = hidden_dim // 4 = 128
+  num_layers: 1
+
+dropout: 0.3             # feature dropout (applied after backbone) + action-head dropout
+label_smoothing: 0.01
+
+# ── Stage A: person-action temporal pretraining (9 classes) ─────────────────
+# Frozen backbone → LSTM + skip Conv1d → 9-way head.  LSTM, project, and
+# conv_projection all train; backbone is frozen throughout.
+stage_a:
+  num_epochs: 50
+  learning_rate: 1e-3
+  weight_decay: 5e-4
+  early_stopping_patience: 10
+  class_weighted_loss: true   # counters the ~68% "standing" majority
+
+# ── Stage B: group-activity head (8 classes) ────────────────────────────────
+# Stage-A model frozen; per-player forward_summaries (128-dim) are mask-pooled
+# and a small MLP classifies the group activity.  Only the head trains.
+stage_b:
+  num_epochs: 50
+  learning_rate: 1e-3
+  weight_decay: 5e-4
+  hidden_dim: 3072        # MLP hidden width (input = summary_dim or 2×summary_dim)
+  dropout: 0.3
+  # Player-dim aggregation:
+  #   "max"    — max-pooling across players (course definition)
+  #   "mean"   — mean-pooling across valid players
+  #   "concat" — max ‖ mean (doubles classifier input; best for B3)
+  pool: "concat"
+  early_stopping_patience: 10
+  class_weighted_loss: true   # l/r_winpoint ~2.5× rarer
+
+# Cosine schedule applies to Stage B's optimizer; Stage A keeps a flat LR.
+lr_scheduler:
+  name: CosineAnnealingLR
+  T_max: ${stage_b.num_epochs}
+  eta_min: 1e-5
+
+model:
+  # Frozen feature-extractor backbone ("resnet50" or "resnet101").
+  name: "resnet50"
+  # B6 re-uses B3's Stage-A person-action backbone as the frozen spatial
+  # feature extractor (same as B5).
+  checkpoint: "baseline3_stage_a_run2.pt"
+
+device: cuda
+seed: 42
+
+hydra:
+  run:
+    dir: ./runs/baseline6/${now:%Y-%m-%d}/${now:%H-%M-%S}
