@@ -46,7 +46,7 @@
 %----------------------------------------------------------
 
 \begin{abstract}
-   A condensed summary of the Volleyball Group Activity Recognition project: the data pipeline, the generic multi-baseline loader, and the three completed baselines --- B1, a single-frame fine-tuned ResNet-50 (62.6\% test accuracy / 0.630 macro F1); B3, a person-then-group crop classifier (60.7\% / 0.589); and B4, a temporal classifier that runs an LSTM over B1's frozen frame features (66.1\% / 0.673, the strongest result so far). The dataset (Ibrahim et al., CVPR 2016) contains 55 videos / 4{,}830 clips with 8 scene-level group activities and 9 player-level actions.
+   A condensed summary of the Volleyball Group Activity Recognition project: the data pipeline, the generic multi-baseline loader, and the four completed baselines --- B1, a single-frame fine-tuned ResNet-50 (62.6\% test accuracy / 0.630 macro F1); B3, a person-then-group crop classifier (60.7\% / 0.589); B4, a temporal classifier that runs an LSTM over B1's frozen frame features (66.1\% / 0.673, best macro F1); and B5, a per-player temporal model that pools LSTM summaries of each player's crop sequence (66.3\% / 0.619, best accuracy). The dataset (Ibrahim et al., CVPR 2016) contains 55 videos / 4{,}830 clips with 8 scene-level group activities and 9 player-level actions.
 \end{abstract}
 
 %----------------------------------------------------------
@@ -79,7 +79,7 @@ Table~\ref{tab:baselines} lists the planned progression of models, each adding t
 
 \begin{table}[h]
     \centering
-    \caption{Baseline models. B1, B3, and B4 are complete; B5--B8 pending.}
+    \caption{Baseline models. B1, B3, B4, and B5 are complete; B6--B8 pending.}
     \label{tab:baselines}
     \begin{tabular}{lccc}
         \toprule
@@ -88,7 +88,7 @@ Table~\ref{tab:baselines} lists the planned progression of models, each adding t
         B1 & --- & --- & Image clf. \\
         B3 & --- & Crop clf. & Concat-pool + MLP \\
         B4 & LSTM & --- & LSTM \\
-        B5 & LSTM/player & Max-pool & NN \\
+        B5 & LSTM/player & Concat-pool & MLP \\
         B6 & LSTM/image & Max-pool & LSTM \\
         B7 & LSTM$_1$ + LSTM$_2$ & Max-pool & LSTM$_2$ \\
         B8 & LSTM$_1$ + LSTM$_2$ & Team-split & LSTM$_2$ \\
@@ -180,9 +180,37 @@ B4 is the strongest baseline so far: temporal context over B1's own features is 
     \label{fig:b4-confusion}
 \end{figure}
 
+\section{Baseline 5: Temporal Person-Level Model}
+
+A two-stage temporal extension of B3. \textbf{Stage A} feeds each player's 9-crop sequence through B3's \textbf{frozen} Stage-A person-action backbone and trains a shared LSTM (hidden 3072, 1 layer) + head to classify the 9 person actions from the sequence's final hidden state. \textbf{Stage B} freezes the Stage-A model entirely, computes one LSTM summary per player per clip, pools the summaries across players with masked concat (max $\|$ mean, classifier input $2 \times 3072$), and trains an MLP head ($6144 \to 3072 \to 1536 \to 8$, LayerNorm + Dropout 0.2) on the 8 group activities. Training uses SGD (lr $10^{-3}$, cosine annealing in Stage B), class-weighted CE in both stages, and gradient accumulation (effective batch 8 = micro 4 $\times$ 2) since each clip expands to $9 \times {\sim}12$ crop images.
+
+\begin{table}[h]
+    \centering
+    \caption{Baseline 5 test-set metrics.}
+    \label{tab:b5-metrics}
+    \begin{tabular}{lc}
+        \toprule
+        \textbf{Metric} & \textbf{Value} \\
+        \midrule
+        Accuracy   & \textbf{66.34\%} \\
+        Macro F1   & \textbf{0.619} \\
+        Test Loss  & \textbf{0.97} \\
+        \bottomrule
+    \end{tabular}
+\end{table}
+
+B5 achieves the \textbf{best test accuracy and test loss of all baselines} (66.3\% / 0.97 vs.\ B4's 66.1\% / 1.05) and is markedly stronger on the core activities --- spike F1 reaches 0.78--0.80 and set 0.71 on both court sides, with cross-activity confusion nearly eliminated --- direct evidence that per-player temporal modeling adds signal beyond B4's scene-level features. Its macro F1 (0.619) nevertheless trails B4 (0.673) because of a single failure mode: \textbf{the \texttt{l/r\_winpoint} confusion is the worst left/right confusion of any baseline in this project}. As Fig.~\ref{fig:b5-confusion} shows, \texttt{r\_winpoint} collapses to 0.08 recall (F1 0.13), with 83\% of true \texttt{r\_winpoint} clips predicted as \texttt{l\_winpoint}. The cause is structural: orderless max/mean pooling over all ${\sim}12$ players erases which side of the net each player occupies; winpoint clips show both teams in near-identical celebration poses, so side identity is the only discriminative signal --- and the pooling destroys it. B8's team-split pooling (pool each team's six players separately, then concatenate) directly targets this failure.
+
+\begin{figure}[h]
+    \centering
+    \includegraphics[width=0.95\linewidth]{figures/b5_confusion_matrix.png}
+    \caption{Baseline 5 test confusion matrix. Note the \texttt{r\_winpoint} row: 83\% of its clips are predicted as \texttt{l\_winpoint} --- the side-blind pooling failure discussed in the text.}
+    \label{fig:b5-confusion}
+\end{figure}
+
 \section{Next Steps}
 
-(i) Reduce overfitting across all baselines --- B4 peaks at epoch 4, so stronger augmentation, higher dropout, and earlier stopping are the levers; (ii) proceed to the temporal crop baselines B5--B8 --- noting that player tracking covers only $\approx$half of each clip's frames, so those baselines will exercise the loader's detection-fallback path, which should be reviewed before B5.
+(i) Reduce overfitting across all baselines --- stronger augmentation, higher dropout, and earlier stopping remain the levers (B5's Stage B still reaches ${\sim}90\%$ train accuracy against ${\sim}67\%$ validation); (ii) proceed to the remaining temporal baselines B6--B8 --- above all B8, whose team-split pooling is the direct fix for B5's left/right winpoint collapse; the tracking boxes' $x$-coordinates already provide the team split.
 
 %----------------------------------------------------------
 
