@@ -8,7 +8,7 @@ defaults:
 # batch at batch_size while only micro_batch_size clips are ever
 # materialized at once.
 batch_size: 16           # effective/macro batch (optimizer steps at this size)
-micro_batch_size: 16     # clips per forward/backward; must divide batch_size
+micro_batch_size: 8     # clips per forward/backward; must divide batch_size
 n_frames: 9
 num_workers: 4
 prefetch_factor: 2
