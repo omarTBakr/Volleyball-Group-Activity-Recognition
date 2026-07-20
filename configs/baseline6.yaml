@@ -7,13 +7,13 @@ defaults:
 # crops (9 × ~12 ≈ 108 images).  Gradient accumulation keeps the EFFECTIVE
 # batch at batch_size while only micro_batch_size clips are ever
 # materialized at once.
-batch_size: 8           # effective/macro batch (optimizer steps at this size)
-micro_batch_size: 4      # clips per forward/backward; must divide batch_size
+batch_size: 16           # effective/macro batch (optimizer steps at this size)
+micro_batch_size: 16     # clips per forward/backward; must divide batch_size
 n_frames: 9
 num_workers: 4
 prefetch_factor: 2
 pin_memory: false
-data_parallel: false
+data_parallel: true
 
 # ── Stage-A person LSTM ──────────────────────────────────────────────────────
 # B6 key change: LSTM output + a linear projection of raw backbone features
@@ -33,7 +33,7 @@ stage_a:
   num_epochs: 50
   learning_rate: 1e-3
   weight_decay: 5e-4
-  early_stopping_patience: 10
+  early_stopping_patience: 15
   class_weighted_loss: true   # counters the ~68% "standing" majority
 
 # ── Stage B: group-activity head (8 classes) ────────────────────────────────
@@ -50,7 +50,7 @@ stage_b:
   #   "mean"   — mean-pooling across valid players
   #   "concat" — max ‖ mean (doubles classifier input; best for B3)
   pool: "concat"
-  early_stopping_patience: 10
+  early_stopping_patience: 15
   class_weighted_loss: true   # l/r_winpoint ~2.5× rarer
 
 # Cosine schedule applies to Stage B's optimizer; Stage A keeps a flat LR.
