@@ -1,21 +1,31 @@
 """
-Baseline 6 — Two-stage temporal person-level classification with skip-connection
-LSTM and Conv1d temporal fusion.
+Baseline 6 — Scene-level temporal model (pool players per frame → LSTM over
+time) with a skip-connection and Conv1d temporal fusion.
+
+Core flow (course B6: the LSTM is applied at the image/scene level only):
+    Each frame's player crops go through a frozen person-feature extractor
+    (Baseline 3's Stage-A backbone) and are masked-pooled across players
+    (max / mean / concat) into one vector per frame → a (B, T, D) scene
+    sequence.  An LSTM consumes it; its T hidden states are concatenated
+    along the time axis with a linear projection of the pooled per-frame
+    features (skip connection), giving (B, 2T, lstm_hidden).  A two-stage
+    Conv1d (global kernel 2T) collapses this into a (B, lstm_hidden//4)
+    clip summary.
 
 Stage A (person-action temporal pretraining, 9 classes):
-    Each player's 9-crop sequence goes through a frozen person-feature
-    extractor (Baseline 3's Stage-A backbone) into a shared LSTM.  The
-    LSTM output (all T hidden states) is concatenated along the time axis
-    with a linear projection of the raw backbone features (skip connection),
-    giving a (B, 2T, lstm_hidden) tensor.  A two-stage Conv1d collapses
-    this into a (B, lstm_hidden//4) summary, which is classified into the
-    9 person actions.  Only the LSTM + projection + Conv1d + action head train.
+    The same machinery run with P=1 — each player's track is an independent
+    "clip" (pooling is an identity), and the summary is classified into the
+    9 person actions.  Only LSTM + projection + Conv1d + action head train.
 
-Stage B (group-activity fine-tune, 8 classes):
-    Load Stage A's best model, freeze it.  Each clip's per-player
-    ``forward_summaries`` vectors (lstm_hidden//4-dimensional) are pooled
-    across the player dimension (masked max / mean / concat) and a small
-    MLP head classifies the 8 group activities.  Only the MLP head trains.
+Stage B (group-activity fine-tune, 8 classes) — two phases:
+    Load Stage A's best model.  Full clips (all players) produce
+    lstm_hidden//4 summaries; a small MLP head classifies the 8 group
+    activities.  Phase 1 is a linear probe (temporal model frozen, head
+    only, ``stage_b.warmup_epochs``); phase 2 unfreezes the LSTM, skip
+    projection, and Conv1d and fine-tunes jointly with differential
+    learning rates (temporal at ``stage_b.learning_rate``, head at
+    ``learning_rate × head_lr_multiplier``).  The ResNet extractor stays
+    frozen throughout.
 
 Uses:
     - Crop mode, ``n_frames=9`` (temporal window of per-player crops)
@@ -78,11 +88,12 @@ from utils.utility import (
 
 class PersonTemporalLSTM(nn.Module):
     """
-    Stage A: frozen person features per crop → shared LSTM → 9-class action.
+    Scene-level temporal model: frozen per-crop features → masked player pool
+    per frame → LSTM over time → skip-connection + Conv1d fusion → summary.
 
-    Consumes one crop SEQUENCE per player: ``(N, T, C, H, W)`` where N is
-    a flat batch of players (padded slots are filtered out by the Stage-A
-    unpacker before they reach the model).
+    Consumes clips ``(B, T, P, C, H, W)`` with player masks ``(B, P)``.
+    Stage A feeds P=1 single-player tracks (9-action head); Stage B feeds
+    full clips and reads ``forward_summaries``.
 
     Parameters
     ----------
@@ -103,6 +114,11 @@ class PersonTemporalLSTM(nn.Module):
         Only consulted when ``checkpoint`` is None. ``False`` leaves the
         extractor randomly initialized — for callers that immediately
         restore the whole model from a saved checkpoint (evaluation).
+    pool : {"max", "mean", "concat"}
+        Per-frame aggregation across players, applied BEFORE the LSTM.
+        "concat" (max‖mean) doubles the LSTM's input width.
+    T : int
+        Frames per clip; fixes the Conv1d global kernel (``2*T``).
 
     """
 
@@ -115,10 +131,12 @@ class PersonTemporalLSTM(nn.Module):
         lstm_layers: int = 1,
         dropout: float = 0.3,
         pretrained_backbone: bool = True,
+        pool: str = "concat",
         T: int = 9,
     ) -> None:
         super().__init__()
         self.T = T
+        self.pool = pool
         # Frozen — stays in eval mode and produces no-grad features.
         self.extractor = FeatureExtractor(
             model_name=backbone_name, checkpoint=checkpoint,
@@ -126,19 +144,29 @@ class PersonTemporalLSTM(nn.Module):
         )
         self.feature_dropout = nn.Dropout(p=dropout)
 
+        if pool not in ("max", "mean", "concat"):
+            raise ValueError(f"Unsupported pool '{pool}'. Use 'max', 'mean' or 'concat'.")
+
         self.lstm_hidden = lstm_hidden
+        # Players are pooled per frame BEFORE the LSTM, so the LSTM consumes
+        # one pooled scene vector per timestep. "concat" (max‖mean) doubles
+        # that vector's width; the LSTM and the skip projection must match it.
+        lstm_input_size = (
+            2 * self.extractor.feature_dim if pool == "concat"
+            else self.extractor.feature_dim
+        )
         self.lstm = nn.LSTM(
-            input_size=self.extractor.feature_dim,
+            input_size=lstm_input_size,
             hidden_size=lstm_hidden,
             num_layers=lstm_layers,
             batch_first=True,
             dropout=dropout if lstm_layers > 1 else 0.0,
         )
 
-        # Project raw backbone features to LSTM hidden size so they can be
-        # concatenated with the LSTM output along the time axis (skip connection).
-        # Result after concat: (B, 2*T, lstm_hidden)
-        self.project = nn.Linear(self.extractor.feature_dim, lstm_hidden)
+        # Project the pooled per-frame features to LSTM hidden size so they can
+        # be concatenated with the LSTM output along the time axis (skip
+        # connection). Result after concat: (B, 2*T, lstm_hidden)
+        self.project = nn.Linear(lstm_input_size, lstm_hidden)
 
         # Conv1d collapses the (B, lstm_hidden, 2*T) tensor to (B, lstm_hidden//4).
         # kernel_size=2*T is a global temporal kernel — exactly one output position.
@@ -162,56 +190,87 @@ class PersonTemporalLSTM(nn.Module):
         )
 
     def feature_extractor(self, x: torch.Tensor) -> torch.Tensor:
-        """``(B, T, C, H, W)`` → ``(B, T, D)`` backbone features (no LSTM)."""
-        B, T, C, H, W = x.shape
-        x = self.extractor(x.reshape(B * T, C, H, W))
-        return x.view(B, T, -1)
+        """``(B, T, P, C, H, W)`` → ``(B, T, P, D)`` backbone features (no LSTM)."""
+        B, T, P, C, H, W = x.shape
+        with torch.no_grad():
+            x = self.extractor(x.reshape(B * T * P, C, H, W))
+            return x.view(B, T, P, -1)
 
-    def forward_summaries(self, seqs: torch.Tensor) -> torch.Tensor:
-        """``(N, T, C, H, W)`` → ``(N, lstm_hidden//4)`` summary vectors.
+    def forward_summaries(self, seqs: torch.Tensor, masks: torch.Tensor) -> torch.Tensor:
+        """``(B, T, P, C, H, W)`` + ``(B, P)`` masks → ``(B, lstm_hidden//4)`` summaries.
 
-        Used by Stage B to extract per-player representations before
-        the group-level pooling step.
+        Players are pooled per frame BEFORE the LSTM, so the LSTM models
+        scene-level dynamics. Stage A calls this with P=1 (a single player's
+        track, pooling is an identity); Stage B with the full player set.
         """
-        feats = self.feature_extractor(seqs)      # (B, T, D)
+        B, T, P, C, H, W = seqs.shape
+        feats = self.feature_extractor(seqs)      # (B, T, P, D)
         feats = self.feature_dropout(feats)
 
-        out, _ = self.lstm(feats)                 # (B, T, lstm_hidden)
-        feats_projected = self.project(feats)     # (B, T, lstm_hidden)
+        # Masked pooling across players (dim=2) — padded slots must not
+        # contribute. masks (B, P) broadcasts over time and feature dims.
+        mask4 = masks[:, None, :, None]           # (B, 1, P, 1)
+
+        if self.pool in ("max", "concat"):
+            pooled_max = feats.masked_fill(~mask4, float("-inf")).max(dim=2)[0]
+            pooled_max = torch.where(
+                torch.isinf(pooled_max), torch.zeros_like(pooled_max), pooled_max,
+            )                                     # (B, T, D)
+        if self.pool in ("mean", "concat"):
+            valid = masks.sum(dim=1).clamp_min(1).view(B, 1, 1).float()
+            pooled_mean = feats.masked_fill(~mask4, 0.0).sum(dim=2) / valid  # (B, T, D)
+
+        if self.pool == "max":
+            # pyrefly: ignore [unbound-name]
+            team = pooled_max
+        elif self.pool == "mean":
+            # pyrefly: ignore [unbound-name]
+            team = pooled_mean
+        else:
+            # pyrefly: ignore [unbound-name]
+            team = torch.cat([pooled_max, pooled_mean], dim=-1)   # (B, T, 2D)
+
+        out, (_ , _ ) = self.lstm(team)                  # (B, T, lstm_hidden)
+        team_projected = self.project(team)       # (B, T, lstm_hidden)
 
         # Skip connection along TIME dim → (B, 2T, lstm_hidden)
-        combined = torch.cat([out, feats_projected], dim=1)
+        combined = torch.cat([out, team_projected], dim=1)
         combined = combined.permute(0, 2, 1)      # (B, lstm_hidden, 2T)
 
         return self.conv_projection(combined)     # (B, lstm_hidden//4)
 
-    def forward(self, seqs: torch.Tensor) -> torch.Tensor:
-        """``(N, T, C, H, W)`` → ``(N, num_actions)`` logits."""
-        summary = self.forward_summaries(seqs)    # (B, lstm_hidden//4)
-        return self.action_head(summary)
+    def forward(self, seqs: torch.Tensor, masks: torch.Tensor) -> torch.Tensor:
+        """``(B, T, P, C, H, W)`` + ``(B, P)`` → ``(B, num_actions)`` logits."""
+        return self.action_head(self.forward_summaries(seqs, masks))
 
 
 
 class GroupTemporalClassifier(nn.Module):
     """
-    Stage B: frozen Stage-A person LSTM → masked pool across players → MLP → 8.
+    Stage B: Stage-A scene model → clip summary → MLP → 8.
+
+    Player pooling happens inside ``person_model.forward_summaries`` (before
+    its LSTM), so the summary handed to the classifier is always
+    ``lstm_hidden // 4`` wide regardless of the pooling mode.
+
+    Training is two-phase (mirroring baseline1): the model is constructed
+    with the Stage-A temporal machinery frozen (linear probe — only the MLP
+    head trains), then ``unfreeze_temporal()`` opens the LSTM, skip
+    projection, and Conv1d for joint fine-tuning. The ResNet extractor and
+    Stage A's 9-way action head stay frozen throughout.
 
     Parameters
     ----------
     person_model : PersonTemporalLSTM
-        Already-trained Stage A model; frozen entirely here.
+        Already-trained Stage A model; frozen at construction.
     num_classes : int
         Number of group-activity classes (8).
     hidden_dim : int
         Width of the MLP head's first hidden layer.
     dropout : float
         Dropout inside the MLP head.
-    pool : {"max", "mean", "concat"}
-        Aggregation across players; "concat" doubles the classifier input.
 
     """
-
-    _VALID_POOLS = ("max", "mean", "concat")
 
     def __init__(
         self,
@@ -219,23 +278,17 @@ class GroupTemporalClassifier(nn.Module):
         num_classes: int = NUM_GROUP_ACTIVITIES,
         hidden_dim: int = 512,
         dropout: float = 0.4,
-        pool: str = "max",
     ) -> None:
         super().__init__()
 
-        if pool not in self._VALID_POOLS:
-            raise ValueError(f"Unsupported pool '{pool}'. Use one of {self._VALID_POOLS}.")
-        self.pool = pool
-
         self.person = person_model
-        # Freeze the whole Stage-A model — only the MLP head trains.
+        # Start fully frozen (linear-probe phase) — only the MLP head trains
+        # until unfreeze_temporal() is called.
         for p in self.person.parameters():
             p.requires_grad = False
+        self.temporal_trainable = False
 
-        # The Stage-A model outputs lstm_hidden//4-dimensional summaries.
-        # "concat" pool doubles that by stacking max and mean vectors.
-        summary_dim = person_model.lstm_hidden // 4
-        classifier_in = 2 * summary_dim if pool == "concat" else summary_dim
+        classifier_in = person_model.lstm_hidden // 4
         self.classifier = nn.Sequential(
             nn.Dropout(p=dropout),
             nn.Linear(classifier_in, hidden_dim),
@@ -249,11 +302,27 @@ class GroupTemporalClassifier(nn.Module):
             nn.Linear(hidden_dim // 2, num_classes),
         )
 
+    def unfreeze_temporal(self) -> list[torch.nn.Parameter]:
+        """Open the temporal machinery (LSTM, skip projection, Conv1d) for
+        joint fine-tuning and return its parameters for a low-LR optimizer
+        group. The ResNet extractor and the 9-way action head stay frozen.
+        """
+        temporal_params: list[torch.nn.Parameter] = []
+        for module in (self.person.lstm, self.person.project, self.person.conv_projection):
+            for p in module.parameters():
+                p.requires_grad = True
+                temporal_params.append(p)
+        self.temporal_trainable = True
+        return temporal_params
+
     def train(self, mode: bool = True):
-        # Keep the frozen Stage-A model in eval mode (LSTM dropout off,
-        # deterministic summaries) even when the head trains.
+        # Probe phase: keep the frozen Stage-A model in eval mode (dropout
+        # off, BN running stats untouched, deterministic summaries). After
+        # unfreeze_temporal(), the temporal parts follow train mode; the
+        # ResNet extractor still forces itself to eval (see FeatureExtractor).
         super().train(mode)
-        self.person.eval()
+        if not self.temporal_trainable:
+            self.person.eval()
         return self
 
     def forward(self, crops: torch.Tensor, masks: torch.Tensor) -> torch.Tensor:
@@ -262,37 +331,10 @@ class GroupTemporalClassifier(nn.Module):
         masks : (B, P) bool — True for real players, False for padded slots.
         returns : (B, num_classes) logits
         """
-        B, T, P, C, H, W = crops.shape
-
-        seqs = crops.permute(0, 2, 1, 3, 4, 5).reshape(B * P, T, C, H, W)
-        with torch.no_grad():   # Stage-A model is frozen
-            summaries = self.person.forward_summaries(seqs)     # (B·P, lstm_hidden//4)
-        
-        summaries = summaries.view(B, P, -1)                    # (B, P, H)
-
-        # Masked pooling across players — padded slots must not contribute
-        mask_3d = masks.unsqueeze(-1).expand_as(summaries)
-
-        if self.pool in ("max", "concat"):
-            pooled_max = summaries.masked_fill(~mask_3d, float("-inf")).max(dim=1)[0]
-            pooled_max = torch.where(
-                torch.isinf(pooled_max), torch.zeros_like(pooled_max), pooled_max,
-            )
-        if self.pool in ("mean", "concat"):
-            valid = masks.sum(dim=1).clamp_min(1).unsqueeze(-1).float()
-            pooled_mean = summaries.masked_fill(~mask_3d, 0.0).sum(dim=1) / valid
-
-        if self.pool == "max":
-            # pyrefly: ignore [unbound-name]
-            team = pooled_max
-        elif self.pool == "mean":
-            # pyrefly: ignore [unbound-name]
-            team = pooled_mean
-        else:
-            # pyrefly: ignore [unbound-name]
-            team = torch.cat([pooled_max, pooled_mean], dim=-1)
-
-        return self.classifier(team)
+        # No no_grad here: gradients must reach the temporal machinery once
+        # it is unfrozen. While frozen, requires_grad=False keeps it cheap.
+        summaries = self.person.forward_summaries(crops, masks)  # (B, lstm_hidden//4)
+        return self.classifier(summaries)
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -305,7 +347,12 @@ class GroupTemporalClassifier(nn.Module):
 
 
 def stage_a_unpack(batch):
-    """4-tuple → ``((player_sequences,), person_action_labels)`` for valid players."""
+    """4-tuple → ``((tracks, track_masks), person_action_labels)`` for valid players.
+
+    Each valid player becomes an independent P=1 "clip" ``(N, T, 1, C, H, W)``
+    with an all-ones ``(N, 1)`` mask: the model's per-frame player pooling is
+    then an identity and the LSTM sees that one person's track.
+    """
     if not batch or len(batch) < 4:
         return None
     crops, person_labels, _group_labels, masks = batch
@@ -320,7 +367,11 @@ def stage_a_unpack(batch):
     valid = flat_mask.nonzero(as_tuple=True)[0]
     if valid.numel() == 0:
         return None
-    return (seqs[valid],), labels[valid]
+    tracks = seqs[valid].unsqueeze(2)                      # (N, T, 1, C, H, W)
+    track_masks = torch.ones(
+        tracks.shape[0], 1, dtype=torch.bool, device=tracks.device,
+    )
+    return (tracks, track_masks), labels[valid]
 
 
 def temporal_crop_unpack(batch):
@@ -349,41 +400,39 @@ def _checkpoint_state(ckpt_name: str) -> dict:
     return ckpt.get("model_state_dict", ckpt)
 
 
-def _person_dims(state: dict, prefix: str = "") -> tuple[int, int, int]:
-    """``(lstm_hidden, lstm_layers, T)`` as stored in a PersonTemporalLSTM state.
+def _person_dims(
+    state: dict, prefix: str = "", cfg_pool: str = "max",
+) -> tuple[int, int, int, str]:
+    """``(lstm_hidden, lstm_layers, T, pool)`` stored in a PersonTemporalLSTM state.
 
     ``T`` (number of frames) is recovered from the first Conv1d kernel size:
     ``conv_projection.0.weight`` has shape ``(out, lstm_hidden, 2*T)``.
+    ``pool`` is recovered from the LSTM input width: 2× the backbone feature
+    dim (2048 for resnet50/101) ⇒ "concat". "max" and "mean" share a width,
+    so the config's choice is kept for those.
     """
     hidden = state[f"{prefix}lstm.weight_hh_l0"].shape[1]
     stem = f"{prefix}lstm.weight_ih_l"
     layers = sum(1 for k in state if k.startswith(stem) and k[len(stem):].isdigit())
     conv_w = state[f"{prefix}conv_projection.0.weight"]  # (out, lstm_hidden, 2*T)
     T = int(conv_w.shape[-1]) // 2
-    return int(hidden), layers, T
+    input_size = state[f"{prefix}lstm.weight_ih_l0"].shape[1]
+    if input_size == 2 * 2048:
+        pool = "concat"
+    else:
+        pool = cfg_pool if cfg_pool in ("max", "mean") else "max"
+    return int(hidden), layers, T, pool
 
 
-def _group_dims(state: dict, cfg_pool: str) -> tuple[int, str]:  # noqa: E501
-    """``(hidden_dim, pool)`` consistent with a GroupTemporalClassifier state.
-
-    ``hidden_dim`` is the first classifier Linear's out_features.  In Baseline 6
-    the Stage-A summary is ``lstm_hidden // 4`` wide, so ``2 x (lstm_hidden // 4)``
-    in_features implies ``pool="concat"; ``lstm_hidden // 4`` implies max/mean
-    (indistinguishable by shape -- the config's value is kept).
-    """
-    lstm_hidden, _, _ = _person_dims(state, prefix="person.")  # unpack 3-tuple
-    summary_dim = lstm_hidden // 4
+def _group_dims(state: dict) -> int:
+    """MLP ``hidden_dim`` (first classifier Linear's out_features) in a saved state."""
     linears = sorted(
         (int(k.split(".")[1]), k)
         for k, v in state.items()
         if k.startswith("classifier.") and k.endswith(".weight") and v.dim() == 2
     )
-    hidden_dim, classifier_in = state[linears[0][1]].shape
-    if classifier_in == 2 * summary_dim:
-        pool = "concat"
-    else:
-        pool = cfg_pool if cfg_pool in ("max", "mean") else "max"
-    return int(hidden_dim), pool
+    hidden_dim, _classifier_in = state[linears[0][1]].shape
+    return int(hidden_dim)
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -475,6 +524,7 @@ def train_test(cfg: DictConfig) -> None:
         lstm_hidden=cfg.lstm.hidden_dim,
         lstm_layers=cfg.lstm.num_layers,
         dropout=cfg.get("dropout", 0.3),
+        pool=cfg.get("pool", "max"),    # per-frame player pooling, sets LSTM input width
         T=cfg.n_frames,                 # kernel_size=2*T — must match the data
     ).to(device)
     person_inner = person_model
@@ -563,8 +613,9 @@ def train_test(cfg: DictConfig) -> None:
     # ═════════════════════════════════════════════════════════════════════
     stage_b_cfg = cfg.stage_b
     print(f"\n{'='*60}")
-    print(f"  STAGE B: Group-Activity Head ({stage_b_cfg.num_epochs} epochs, lr={stage_b_cfg.learning_rate})")
-    print(f"  Player pool: {stage_b_cfg.get('pool', 'max')}")
+    print(f"  STAGE B: Group-Activity ({stage_b_cfg.get('warmup_epochs', 10)} probe + "
+          f"{stage_b_cfg.num_epochs} fine-tune epochs)")
+    print(f"  Player pool (per frame, inside scene LSTM): {cfg.get('pool', 'max')}")
     print(f"  Target: {NUM_GROUP_ACTIVITIES} classes — {list(GROUP_ACTIVITY_TO_IDX.keys())}")
     print(f"{'='*60}")
 
@@ -572,7 +623,9 @@ def train_test(cfg: DictConfig) -> None:
     # LSTM dimensions come from the checkpoint itself (see section 3) — the
     # config may have been retuned since that Stage A was trained.
     state_a = _checkpoint_state(stage_a_ckpt)
-    lstm_hidden_a, lstm_layers_a, T_a = _person_dims(state_a)
+    lstm_hidden_a, lstm_layers_a, T_a, pool_a = _person_dims(
+        state_a, cfg_pool=cfg.get("pool", "max"),
+    )
     if (lstm_hidden_a, lstm_layers_a) != (cfg.lstm.hidden_dim, cfg.lstm.num_layers):
         print(
             f"  ⚠ Config LSTM ({cfg.lstm.hidden_dim}×{cfg.lstm.num_layers}) ≠ "
@@ -586,16 +639,17 @@ def train_test(cfg: DictConfig) -> None:
         lstm_hidden=lstm_hidden_a,
         lstm_layers=lstm_layers_a,
         dropout=cfg.get("dropout", 0.3),
+        pool=pool_a,                    # recovered from checkpoint's LSTM input width
         T=T_a,                          # recovered from checkpoint's Conv1d kernel
     ).to(device)
     reloaded, _, _, _, _ = load_model(stage_a_ckpt, reloaded)
 
     group_model = GroupTemporalClassifier(
-        person_model=reloaded,
+        # pyrefly: ignore [bad-argument-type]
+        person_model=reloaded,  # ty:ignore[invalid-argument-type]
         num_classes=NUM_GROUP_ACTIVITIES,
         hidden_dim=stage_b_cfg.get("hidden_dim", 256),
         dropout=stage_b_cfg.get("dropout", 0.3),
-        pool=stage_b_cfg.get("pool", "max"),
     ).to(device)
     group_inner = group_model
 
@@ -616,72 +670,105 @@ def train_test(cfg: DictConfig) -> None:
     else:
         criterion_b = nn.CrossEntropyLoss(label_smoothing=cfg.get("label_smoothing", 0.0))
 
-    trainable_b = [p for p in group_model.parameters() if p.requires_grad]
-    optimizer_b = optim.SGD(
-        trainable_b,
-        lr=stage_b_cfg.learning_rate,
-        momentum=0.9,
-        nesterov=True,
-        weight_decay=stage_b_cfg.get("weight_decay", 5e-4),
-    )
-    scheduler_b = build_scheduler(optimizer_b, cfg)
-    print(f"  Trainable parameters: {sum(p.numel() for p in trainable_b):,}")
+    # Two-phase Stage B (mirrors baseline1): a linear probe with the temporal
+    # model frozen, then joint fine-tuning with differential learning rates.
+    warmup_epochs = stage_b_cfg.get("warmup_epochs", 10)
+    warmup_lr = stage_b_cfg.get("warmup_lr", 1e-3)
+    head_mult = stage_b_cfg.get("head_lr_multiplier", 10)
+    weight_decay_b = stage_b_cfg.get("weight_decay", 5e-4)
 
     best_f1_b = 0.0
     patience_b = stage_b_cfg.get("early_stopping_patience", 0)
-    epochs_without_improvement = 0
 
-    for epoch in range(stage_b_cfg.num_epochs):
-        global_epoch += 1
-        print(f"\n--- Stage B · Epoch {epoch + 1}/{stage_b_cfg.num_epochs} ---")
+    def run_stage_b_phase(phase, num_epochs, optimizer, scheduler=None):
+        nonlocal global_epoch, best_f1_b
+        epochs_without_improvement = 0
+        for epoch in range(num_epochs):
+            global_epoch += 1
+            print(f"\n--- Stage B ({phase}) · Epoch {epoch + 1}/{num_epochs} ---")
 
-        train_loss, train_acc, train_f1, _ = train_one_epoch(
-            group_model, train_loader, criterion_b, optimizer_b, device,
-            batch_unpack=temporal_crop_unpack,
-            num_classes=NUM_GROUP_ACTIVITIES,
-            accumulate_grad_batches=accum_steps,
-            desc="Train[B6-B]",
-        )
-        val_loss, val_acc, val_f1, _ = validate_one_epoch(
-            group_model, val_loader, criterion_b, device,
-            batch_unpack=temporal_crop_unpack,
-            num_classes=NUM_GROUP_ACTIVITIES,
-            desc="Val[B6-B]",
-        )
+            train_loss, train_acc, train_f1, _ = train_one_epoch(
+                group_model, train_loader, criterion_b, optimizer, device,
+                batch_unpack=temporal_crop_unpack,
+                num_classes=NUM_GROUP_ACTIVITIES,
+                accumulate_grad_batches=accum_steps,
+                desc=f"Train[B6-B-{phase}]",
+            )
+            val_loss, val_acc, val_f1, _ = validate_one_epoch(
+                group_model, val_loader, criterion_b, device,
+                batch_unpack=temporal_crop_unpack,
+                num_classes=NUM_GROUP_ACTIVITIES,
+                desc=f"Val[B6-B-{phase}]",
+            )
 
-        if scheduler_b:
-            scheduler_b.step()
-            writer.add_scalar("StageB/LR", scheduler_b.get_last_lr()[0], global_epoch)
+            if scheduler:
+                scheduler.step()
+                writer.add_scalar("StageB/LR", scheduler.get_last_lr()[0], global_epoch)
 
-        writer.add_scalar("StageB/Loss/train", train_loss, global_epoch)
-        writer.add_scalar("StageB/Loss/val", val_loss, global_epoch)
-        writer.add_scalar("StageB/F1/train", train_f1, global_epoch)
-        writer.add_scalar("StageB/F1/val", val_f1, global_epoch)
+            writer.add_scalar("StageB/Loss/train", train_loss, global_epoch)
+            writer.add_scalar("StageB/Loss/val", val_loss, global_epoch)
+            writer.add_scalar("StageB/F1/train", train_f1, global_epoch)
+            writer.add_scalar("StageB/F1/val", val_f1, global_epoch)
 
-        print(f"Train -> Loss: {train_loss:.4f}, Acc: {train_acc:.4f}, F1: {train_f1:.4f}")
-        print(f"Val   -> Loss: {val_loss:.4f}, Acc: {val_acc:.4f}, F1: {val_f1:.4f}")
+            print(f"Train -> Loss: {train_loss:.4f}, Acc: {train_acc:.4f}, F1: {train_f1:.4f}")
+            print(f"Val   -> Loss: {val_loss:.4f}, Acc: {val_acc:.4f}, F1: {val_f1:.4f}")
 
-        entry = {
-            "epoch": global_epoch, "stage": "B",
-            "train_loss": train_loss, "train_acc": train_acc, "train_f1": train_f1,
-            "val_loss": val_loss, "val_acc": val_acc, "val_f1": val_f1,
-            "learning_rate": scheduler_b.get_last_lr()[0] if scheduler_b else stage_b_cfg.learning_rate,
-        }
-        metrics_history.append(entry)
-        with (run_log_dir / f"{run_id}.json").open("w") as f:
-            json.dump({"epochs": metrics_history}, f, indent=4)
+            entry = {
+                "epoch": global_epoch, "stage": f"B-{phase}",
+                "train_loss": train_loss, "train_acc": train_acc, "train_f1": train_f1,
+                "val_loss": val_loss, "val_acc": val_acc, "val_f1": val_f1,
+                "learning_rate": (
+                    scheduler.get_last_lr()[0] if scheduler
+                    else optimizer.param_groups[0]["lr"]
+                ),
+            }
+            metrics_history.append(entry)
+            with (run_log_dir / f"{run_id}.json").open("w") as f:
+                json.dump({"epochs": metrics_history}, f, indent=4)
 
-        if val_f1 > best_f1_b:
-            best_f1_b = val_f1
-            epochs_without_improvement = 0
-            save_model(stage_b_ckpt, global_epoch, group_inner, optimizer_b, val_loss,
-                       class_to_idx=GROUP_ACTIVITY_TO_IDX)
-            print(f"  ✓ New best Stage-B model saved (group F1: {best_f1_b:.4f})")
-        else:
-            epochs_without_improvement += 1
-            if patience_b > 0 and epochs_without_improvement >= patience_b:
-                print(f"  ⏹ Stage-B early stopping — no improvement for {patience_b} epochs.")
-                break
+            if val_f1 > best_f1_b:
+                best_f1_b = val_f1
+                epochs_without_improvement = 0
+                save_model(stage_b_ckpt, global_epoch, group_inner, optimizer, val_loss,
+                           class_to_idx=GROUP_ACTIVITY_TO_IDX)
+                print(f"  ✓ New best Stage-B model saved (group F1: {best_f1_b:.4f})")
+            else:
+                epochs_without_improvement += 1
+                if patience_b > 0 and epochs_without_improvement >= patience_b:
+                    print(f"  ⏹ Stage-B ({phase}) early stopping — no improvement for {patience_b} epochs.")
+                    break
+
+    # ── Phase 1: linear probe — temporal model frozen, head only ─────────
+    head_params = list(group_inner.classifier.parameters())
+    optimizer_probe = optim.SGD(
+        head_params,
+        lr=warmup_lr,
+        momentum=0.9,
+        nesterov=True,
+        weight_decay=weight_decay_b,
+    )
+    print(f"  Phase 1 — linear probe: {warmup_epochs} epochs, head lr={warmup_lr}")
+    print(f"  Trainable parameters: {sum(p.numel() for p in head_params):,}")
+    run_stage_b_phase("probe", warmup_epochs, optimizer_probe)
+
+    # ── Phase 2: joint fine-tune — unfreeze LSTM/projection/Conv1d ───────
+    temporal_params = group_inner.unfreeze_temporal()
+    optimizer_ft = optim.SGD(
+        [
+            {"params": temporal_params, "lr": stage_b_cfg.learning_rate},
+            {"params": head_params, "lr": stage_b_cfg.learning_rate * head_mult},
+        ],
+        momentum=0.9,
+        nesterov=True,
+        weight_decay=weight_decay_b,
+    )
+    scheduler_ft = build_scheduler(optimizer_ft, cfg)
+    print(f"\n  Phase 2 — joint fine-tune: {stage_b_cfg.num_epochs} epochs, "
+          f"temporal lr={stage_b_cfg.learning_rate}, "
+          f"head lr={stage_b_cfg.learning_rate * head_mult}")
+    print(f"  Trainable parameters: "
+          f"{sum(p.numel() for p in temporal_params) + sum(p.numel() for p in head_params):,}")
+    run_stage_b_phase("ft", stage_b_cfg.num_epochs, optimizer_ft, scheduler_ft)
 
     # ── Test best Stage-B model ──────────────────────────────────────────
     # Rebuilt from the SAVED checkpoint's architecture: within this run the
@@ -689,13 +776,10 @@ def train_test(cfg: DictConfig) -> None:
     # holds when testing a checkpoint from an older iteration.
     print("\n--- Testing best Stage-B model ---")
     state_b = _checkpoint_state(stage_b_ckpt)
-    lstm_hidden_b, lstm_layers_b, T_b = _person_dims(state_b, prefix="person.")
-    hidden_b, pool_b = _group_dims(state_b, stage_b_cfg.get("pool", "max"))
-    if pool_b != stage_b_cfg.get("pool", "max"):
-        print(
-            f"  ⚠ Config pool '{stage_b_cfg.get('pool', 'max')}' is incompatible with "
-            f"checkpoint '{stage_b_ckpt}' — using '{pool_b}'.",
-        )
+    lstm_hidden_b, lstm_layers_b, T_b, pool_b = _person_dims(
+        state_b, prefix="person.", cfg_pool=cfg.get("pool", "max"),
+    )
+    hidden_b = _group_dims(state_b)
     fresh_person = PersonTemporalLSTM(
         num_actions=NUM_PERSON_ACTIONS,
         backbone_name=cfg.model.name,
@@ -703,6 +787,7 @@ def train_test(cfg: DictConfig) -> None:
         lstm_hidden=lstm_hidden_b,
         lstm_layers=lstm_layers_b,
         dropout=cfg.get("dropout", 0.3),
+        pool=pool_b,                    # recovered from checkpoint's LSTM input width
         T=T_b,                          # recovered from checkpoint's Conv1d kernel
     ).to(device)
     best_group = GroupTemporalClassifier(
@@ -710,7 +795,6 @@ def train_test(cfg: DictConfig) -> None:
         num_classes=NUM_GROUP_ACTIVITIES,
         hidden_dim=hidden_b,
         dropout=stage_b_cfg.get("dropout", 0.3),
-        pool=pool_b,
     ).to(device)
     best_group, _, _, _, _ = load_model(stage_b_ckpt, best_group)
     if use_dp:
@@ -745,8 +829,11 @@ def train_test(cfg: DictConfig) -> None:
             "stage_a_patience":        stage_a_cfg.get("early_stopping_patience", 0),
             "stage_b_epochs":          stage_b_cfg.num_epochs,
             "stage_b_lr":              stage_b_cfg.learning_rate,
+            "stage_b_warmup_epochs":   stage_b_cfg.get("warmup_epochs", 10),
+            "stage_b_warmup_lr":       stage_b_cfg.get("warmup_lr", 1e-3),
+            "stage_b_head_lr_mult":    stage_b_cfg.get("head_lr_multiplier", 10),
             "stage_b_hidden_dim":      stage_b_cfg.get("hidden_dim", 256),
-            "stage_b_pool":            stage_b_cfg.get("pool", "max"),
+            "pool":                    cfg.get("pool", "max"),
             "stage_b_patience":        stage_b_cfg.get("early_stopping_patience", 0),
             "lstm_hidden":             cfg.lstm.hidden_dim,
             "lstm_layers":             cfg.lstm.num_layers,

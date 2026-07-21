@@ -7,28 +7,39 @@ defaults:
 # crops (9 × ~12 ≈ 108 images).  Gradient accumulation keeps the EFFECTIVE
 # batch at batch_size while only micro_batch_size clips are ever
 # materialized at once.
-batch_size: 4          # effective/macro batch (optimizer steps at this size)
-micro_batch_size: 2    # clips per forward/backward; must divide batch_size
+batch_size: 8          # effective/macro batch (optimizer steps at this size)
+micro_batch_size: 4    # clips per forward/backward; must divide batch_size
 n_frames: 9
 num_workers: 4
 prefetch_factor: 2
 pin_memory: false
 data_parallel: true
 
-# ── Stage-A person LSTM ──────────────────────────────────────────────────────
-# B6 key change: LSTM output + a linear projection of raw backbone features
-# are concatenated along the time axis (skip connection) and collapsed via
-# a two-stage Conv1d into a lstm_hidden//4 summary vector.
+# ── Scene-level temporal model ───────────────────────────────────────────────
+# B6 pools players per frame BEFORE the LSTM (course definition: LSTM on the
+# image/scene level only), then adds a skip connection: the LSTM's T hidden
+# states are concatenated along time with a projection of the pooled per-frame
+# features, and a two-stage Conv1d (global kernel 2*T) collapses the result
+# into a lstm_hidden//4 clip summary.
 lstm:
   hidden_dim: 512        # lstm_hidden; summary dim = hidden_dim // 4 = 128
   num_layers: 1
+
+# Per-frame aggregation across players, applied BEFORE the LSTM.  This sizes
+# the LSTM input: "max"/"mean" → 2048, "concat" (max‖mean) → 4096.
+#   "max"    — course definition; also keeps Stage A (P=1 tracks) and Stage B
+#              (full clips) consistent: pooling one player is an identity.
+#   "concat" — richer, but for P=1 it duplicates the vector ([x‖x]), so the
+#              LSTM trains on a slightly different input distribution than
+#              Stage B feeds it.
+pool: "max"
 
 dropout: 0.3             # feature dropout (applied after backbone) + action-head dropout
 label_smoothing: 0.01
 
 # ── Stage A: person-action temporal pretraining (9 classes) ─────────────────
-# Frozen backbone → LSTM + skip Conv1d → 9-way head.  LSTM, project, and
-# conv_projection all train; backbone is frozen throughout.
+# Frozen backbone → per-player track (P=1) through the scene model → 9-way
+# head.  LSTM, project, and conv_projection all train; backbone is frozen.
 stage_a:
   num_epochs: 50
   learning_rate: 1e-3
@@ -36,24 +47,28 @@ stage_a:
   early_stopping_patience: 15
   class_weighted_loss: true   # counters the ~68% "standing" majority
 
-# ── Stage B: group-activity head (8 classes) ────────────────────────────────
-# Stage-A model frozen; per-player forward_summaries (128-dim) are mask-pooled
-# and a small MLP classifies the group activity.  Only the head trains.
+# ── Stage B: group-activity (8 classes), two phases ─────────────────────────
+# Full clips produce lstm_hidden//4 (=128-dim) summaries; an MLP classifies
+# the group activity.
+#   Phase 1 (linear probe): temporal model frozen, head only, flat warmup_lr.
+#   Phase 2 (joint fine-tune): LSTM + skip projection + Conv1d unfrozen with
+#   differential LRs — temporal at learning_rate, head at learning_rate ×
+#   head_lr_multiplier.  The cosine schedule (below) applies to phase 2.
+# The ResNet extractor stays frozen in both phases.
 stage_b:
-  num_epochs: 50
-  learning_rate: 1e-3
+  warmup_epochs: 10       # phase-1 linear probe epochs
+  warmup_lr: 1e-3         # phase-1 head lr (flat)
+  num_epochs: 50          # phase-2 joint fine-tune epochs
+  learning_rate: 1e-4     # phase-2 temporal (LSTM/project/conv) lr
+  head_lr_multiplier: 10  # phase-2 head lr = 1e-4 × 10 = 1e-3
   weight_decay: 5e-4
-  hidden_dim: 3072        # MLP hidden width (input = summary_dim or 2×summary_dim)
-  dropout: 0.3
-  # Player-dim aggregation:
-  #   "max"    — max-pooling across players (course definition)
-  #   "mean"   — mean-pooling across valid players
-  #   "concat" — max ‖ mean (doubles classifier input; best for B3)
-  pool: "concat"
+  hidden_dim: 512         # MLP hidden width (input = lstm_hidden//4 = 128)
+  dropout: 0.2
   early_stopping_patience: 15
   class_weighted_loss: true   # l/r_winpoint ~2.5× rarer
 
-# Cosine schedule applies to Stage B's optimizer; Stage A keeps a flat LR.
+# Cosine schedule applies to Stage B's phase-2 (joint fine-tune) optimizer;
+# Stage A and the phase-1 probe keep flat LRs.
 lr_scheduler:
   name: CosineAnnealingLR
   T_max: ${stage_b.num_epochs}
