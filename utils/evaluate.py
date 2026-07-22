@@ -308,11 +308,62 @@ def _build_model(baseline_name: str, cfg: DictConfig) -> nn.Module:
             pool=pool,
         )
 
-    # B6–B8 (hierarchical temporal baselines): add a branch here once their
-    # model classes exist in models/ — mirror the baseline5 pattern.
+    if baseline_name == "baseline6":
+        # Scene-level temporal model: evaluation scores the Stage-B group
+        # classifier (checkpoint = baseline6_stage_b_runN.pt); its state dict
+        # nests the Stage-A scene model under "person.*". Architecture details
+        # (LSTM hidden/layers, frame count T, pool mode, MLP width) are read
+        # from the checkpoint via baseline6's own inference helpers, so the
+        # YAML can drift after training without breaking reloads.
+        from models.baseline6 import (
+            GroupTemporalClassifier,
+            PersonTemporalLSTM,
+            _checkpoint_state,
+            _group_dims,
+            _person_dims,
+        )
+
+        cfg_pool = cfg.get("pool", "max")
+        try:
+            state = _checkpoint_state(_PENDING_CKPT["filename"])
+            lstm_hidden, lstm_layers, T, pool = _person_dims(
+                state, prefix="person.", cfg_pool=cfg_pool,
+            )
+            head_hidden = _group_dims(state)
+            print(
+                f"  ⓘ Checkpoint architecture: LSTM {lstm_hidden}×{lstm_layers}, "
+                f"T={T}, pool='{pool}', MLP hidden={head_hidden}."
+            )
+        except (FileNotFoundError, KeyError, TypeError):
+            lstm_hidden, lstm_layers = cfg.lstm.hidden_dim, cfg.lstm.num_layers
+            T, pool = cfg.get("n_frames", 9), cfg_pool
+            head_hidden = cfg.stage_b.get("hidden_dim", 512)
+
+        person = PersonTemporalLSTM(
+            num_actions=NUM_PERSON_ACTIONS,
+            backbone_name=cfg.model.name,
+            checkpoint=None,
+            lstm_hidden=lstm_hidden,
+            lstm_layers=lstm_layers,
+            dropout=cfg.get("dropout", 0.3),
+            # Skip the ImageNet init — _load_checkpoint restores every
+            # weight (incl. the extractor backbone) from the Stage-B ckpt.
+            pretrained_backbone=False,
+            pool=pool,
+            T=T,
+        )
+        return GroupTemporalClassifier(
+            person_model=person,
+            num_classes=NUM_GROUP_ACTIVITIES,
+            hidden_dim=head_hidden,
+            dropout=cfg.stage_b.get("dropout", 0.3),
+        )
+
+    # B7–B8 (hierarchical temporal baselines): add a branch here once their
+    # model classes exist in models/ — mirror the baseline5/6 pattern.
     raise ValueError(
         f"Evaluation not implemented for baseline: '{baseline_name}'. "
-        "Supported: baseline1, baseline3, baseline4, baseline5."
+        "Supported: baseline1, baseline3, baseline4, baseline5, baseline6."
     )
 
 
@@ -327,12 +378,12 @@ def _dataset_kwargs_for(baseline_name: str, cfg: DictConfig) -> dict[str, Any]:
     if baseline_name == "baseline4":
         return {"full_image": True, "n_frames": cfg.get("n_frames", 9)}
 
-    if baseline_name == "baseline5":
+    if baseline_name in ("baseline5", "baseline6"):
         return {"full_image": False, "crop": True, "n_frames": cfg.get("n_frames", 9)}
 
     raise ValueError(
         f"Dataset config not defined for baseline: '{baseline_name}'. "
-        "Supported: baseline1, baseline3, baseline4, baseline5."
+        "Supported: baseline1, baseline3, baseline4, baseline5, baseline6."
     )
 
 
@@ -352,6 +403,13 @@ def _batch_unpack_for(baseline_name: str) -> BatchUnpack:
 
     if baseline_name == "baseline5":
         from models.baseline5 import temporal_crop_unpack
+
+        return temporal_crop_unpack
+
+    if baseline_name == "baseline6":
+        # Same 4-tuple crop contract as baseline5, but baseline6's forward
+        # takes (crops, masks) with per-frame pooling done inside the model.
+        from models.baseline6 import temporal_crop_unpack
 
         return temporal_crop_unpack
 

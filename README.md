@@ -11,8 +11,8 @@ The snapshot shows the output of `python -m src.data.visualize_data` with `video
 ## At a Glance
 
 - **Dataset**: 55 volleyball videos, 4,830 clips, two annotation levels — 8 group activities (scene-level) and 9 person actions (player-level).
-- **Baselines**: 8 progressively complex models (B1–B8) sharing a single data loader. **B1, B3, B4, and B5 are complete; B6–B8 are pending.**
-- **Current test scores**: B5 accuracy **66.3%** / macro-F1 **0.619** (best accuracy); B4 **66.1%** / **0.673** (best macro-F1); B1 **62.6%** / **0.630**; B3 **60.7%** / **0.589** (see [Results](#results)).
+- **Baselines**: 8 progressively complex models (B1–B8) sharing a single data loader. **B1, B3, B4, B5, and B6 are complete; B7 and B8 are pending.**
+- **Current test scores**: B6 accuracy **70.5%** / macro-F1 **0.686** (best on both metrics); B5 66.3% / 0.619; B4 66.1% / 0.673; B1 62.6% / 0.630; B3 60.7% / 0.589 (see [Results](#results)).
 - **Stack**: PyTorch + Hydra config + TensorBoard logging; multi-GPU via `nn.DataParallel`; Kaggle dual-T4 ready.
 - **Paper**: Ibrahim et al., *A Hierarchical Deep Temporal Model for Group Activity Recognition*, CVPR 2016.
 
@@ -70,11 +70,12 @@ python -m models.baseline1   # B1: Two-stage fine-tuned ResNet-50
 python -m models.baseline3   # B3: Person-then-group crop classifier
 python -m models.baseline4   # B4: Frozen B1 backbone → LSTM (needs baseline1_run2.pt)
 python -m models.baseline5   # B5: Per-player LSTM → pooled group head (needs baseline3_stage_a_run2.pt)
+python -m models.baseline6   # B6: Pooled-scene LSTM + skip Conv1d (needs baseline3_stage_a_run2.pt)
 ```
 
 (With `uv`, prefix commands with `uv run`, e.g. `uv run python -m models.baseline1`.)
 
-Hyperparameters live in `configs/baseline{1,3,4,5}.yaml` (Hydra). Per-epoch metrics are written to `logs/<baseline>/runN.json` and a TensorBoard event file under `logs/<baseline>/tensorboard/runN/`.
+Hyperparameters live in `configs/baseline{1,3,4,5,6}.yaml` (Hydra). Per-epoch metrics are written to `logs/<baseline>/runN.json` and a TensorBoard event file under `logs/<baseline>/tensorboard/runN/`.
 
 ### 5. Evaluate a Trained Checkpoint
 
@@ -83,6 +84,7 @@ uv run python -m utils.evaluate --model baseline1_run1.pt           --baseline b
 uv run python -m utils.evaluate --model baseline3_stage_b_run2.pt   --baseline baseline3
 uv run python -m utils.evaluate --model baseline4_run2.pt           --baseline baseline4
 uv run python -m utils.evaluate --model baseline5_stage_b_run4.pt   --baseline baseline5 --batch-size 4
+uv run python -m utils.evaluate --model baseline6_stage_b_run2.pt   --baseline baseline6 --batch-size 4
 ```
 
 Produces confusion matrix, classification report, precision–recall curves, and mAP under `plots/<baseline>/`. `--device cpu` forces CPU; `--batch-size` overrides the config's batch (B5 clips are 9×~12 crops each, so batch 4 is the 8 GB-GPU sweet spot). The evaluator **auto-detects saved architecture details** (B3/B5 pool mode, B4/B5 LSTM shape, B5 head width) from the checkpoint's tensor shapes, so legacy checkpoints and post-training YAML edits both load without changes.
@@ -97,7 +99,7 @@ Produces confusion matrix, classification report, precision–recall curves, and
 | **B3** | ✅ Done | Middle frame (crops) | ✗ | Crop classifier (9 classes) | Max+mean concat pool over players → MLP (8 classes) |
 | **B4** | ✅ Done | 9 frames (full) | LSTM on frame features | ✗ | LSTM → 8 classes |
 | **B5** | ✅ Done | 9 frames (crops) | LSTM per player | Max+mean concat pool over players | MLP (8 classes) |
-| **B6** | 🔲 Pending | 9 frames (crops) | LSTM on pooled frames | Max-pool per frame | LSTM → 8 classes |
+| **B6** | ✅ Done | 9 frames (crops) | LSTM on pooled frames + skip Conv1d fusion | Max-pool per frame (frozen B3 features) | Conv1d summary → MLP (8 classes) |
 | **B7** | 🔲 Pending | 9 frames (crops) | LSTM₁ per player + LSTM₂ | Max-pool per frame | LSTM₂ → 8 classes |
 | **B8** | 🔲 Pending | 9 frames (crops) | LSTM₁ per player + LSTM₂ | Team-split pool (6+6) | Concat teams → LSTM₂ |
 
@@ -250,6 +252,49 @@ The macro-F1 (0.619) nevertheless trails B4 (0.673), and the cause is a single f
 | ![Confusion Matrix](plots/baseline5/Confusion%20Matrix.png) | ![Classification Report](plots/baseline5/Classification%20Report.png) |
 | **Precision-Recall Curves** | **mAP & F1 per Class** |
 | ![Precision-Recall Curves](plots/baseline5/Precision-Recall%20Curves.png) | ![mAP & F1](plots/baseline5/mAP%20%26%20F1%20Score%20per%20Class.png) |
+
+---
+
+### Baseline 6 — Scene-Level Temporal Model (Pool per Frame → LSTM → Skip Conv1d Fusion)
+
+B6 moves the temporal model from the player level (B5) to the **scene level**: each frame's player crops go through B3's **frozen** Stage-A backbone and are **masked max-pooled across players per frame**, producing a `(9, 2048)` scene sequence per clip. An LSTM consumes it, and — instead of using only the last hidden state — its 9 hidden states are concatenated **along the time axis** with a linear projection of the pooled per-frame features (skip connection), giving `(18, 512)`. A two-stage Conv1d with a global temporal kernel collapses this into a 128-dim clip summary.
+
+**Stage A** pretrains the LSTM + projection + Conv1d on the 9 person actions using single-player tracks (P=1, so the per-frame pooling is an identity). **Stage B** is two-phase, mirroring B1: a **linear probe** (temporal model frozen, MLP head only), then a **joint fine-tune** that unfreezes the LSTM/projection/Conv1d with differential learning rates. The ResNet extractor stays frozen throughout.
+
+| Hyperparameter | Value |
+|---|---|
+| Feature extractor | ResNet-50, frozen, loaded from `baseline3_stage_a_run2.pt` |
+| Input | 9-frame crop window per player (`crop_transforms.yaml`, 224×224 warp) |
+| Player pool (per frame, pre-LSTM) | masked **max** over players → `(9, 2048)` scene sequence |
+| Scene LSTM | hidden 512, 1 layer |
+| Skip connection | pooled features → `Linear(2048, 512)`, concat with LSTM outputs along time → `(18, 512)` |
+| Temporal fusion | `Conv1d(512→256, k=18) → BN → ReLU → Conv1d(256→128, k=1) → BN` → 128-dim summary |
+| MLP head | `Linear(128, 512) → LayerNorm → ReLU → Dropout(0.2) → Linear(512, 256) → LayerNorm → ReLU → Dropout(0.2) → Linear(256, 8)` |
+| Stage A | 9-action pretrain on P=1 tracks; SGD lr = 1e-3; 28 epochs (early stop, best at 13; val action F1 0.539) |
+| Stage B phase 1 | linear probe, head only, lr = 1e-3 flat, 10 epochs |
+| Stage B phase 2 | joint fine-tune: temporal lr = 1e-4, head lr = 1e-3 (×10), CosineAnnealingLR, 50 epochs |
+| Batch | effective 8 = micro 4 × 2 gradient-accumulation steps |
+| Class-weighted loss | inverse-frequency, both stages; label smoothing 0.01 |
+
+#### Test Metrics (run 2)
+
+| Metric | Value |
+|--------|-------|
+| Accuracy | **70.53%** |
+| Macro F1 | **0.686** |
+| Loss | 1.04 |
+
+**Analysis.** B6 is the **first baseline to lead on both metrics**: accuracy jumps **+4.2 points over B5** (70.5% vs 66.3%) and macro-F1 edges past B4's long-standing best (0.686 vs 0.673). Scene-level temporal modeling over pooled person features — the paper's "two-stage model without LSTM 1", which scores 74.7% there — clearly beats both scene-level features without persons (B4) and per-player summaries without scene dynamics (B5), and the remaining ~4-point gap to the paper's number is consistent with our frozen (rather than end-to-end) backbone.
+
+The two-phase Stage B was decisive, and the phase curves prove why: the **linear probe plateaued at 0.426 val F1** — a frozen LSTM pretrained only on person actions is a poor group-activity descriptor (the same lesson as the discarded run 1, which froze everything and stalled at 0.33) — while **joint fine-tuning lifted val F1 to 0.646 (+0.22)**. The scene LSTM has to see the group labels; the probe merely gives the head a stable starting point before the temporal weights move.
+
+Per-class, B6 is strong on the acting-player activities — spike F1 hits **0.86/0.82** (l/r) and set 0.72/0.69 — and it **halves B5's winpoint collapse without any team-aware pooling**: `r_winpoint` recall recovers from 0.08 to **0.47** (F1 0.13 → 0.49) and `l_winpoint` reaches F1 0.55. Scene-level temporal context evidently carries some side signal that per-player last-hidden summaries lost. Still, **left/right confusion is now the dominant remaining error across the board**: 47% of true `r_winpoint` goes to `l_winpoint`, l/r-pass leak 20–22% into each other, and 21% of `l_set` is called `r_set` — the model is often right about *what* happened but guesses *which side*. All-player max pooling remains side-blind; that is exactly B8's team-split target. Overfitting is the other standing issue (Stage A train F1 0.96 vs val 0.54; fine-tune train 0.93 vs val 0.64).
+
+| Confusion Matrix | Classification Report |
+|:---:|:---:|
+| ![Confusion Matrix](plots/baseline6/Confusion%20Matrix.png) | ![Classification Report](plots/baseline6/Classification%20Report.png) |
+| **Precision-Recall Curves** | **mAP & F1 per Class** |
+| ![Precision-Recall Curves](plots/baseline6/Precision-Recall%20Curves.png) | ![mAP & F1](plots/baseline6/mAP%20%26%20F1%20Score%20per%20Class.png) |
 
 ---
 

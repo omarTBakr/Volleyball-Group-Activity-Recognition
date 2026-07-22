@@ -35,7 +35,9 @@ if ON_KAGGLE:
 else:
     # ── Local paths ──────────────────────────────────────────────────────
 
-    DATA_DIR                   = BASE_DIR / "DataSet"
+    # DATA_DIR                   = BASE_DIR / "DataSet"                       # HDD VERY SLOW
+    NEW_PATH                   = Path("/home/omar/Code/deepLearningLive/Project1/DataSet") # SSD VERY FAST
+    DATA_DIR                   = NEW_PATH
     MODEL_SAVE_DIR             = BASE_DIR / "saved_models"
     LOGS_DIR                   = BASE_DIR / "logs"
     MAIN_DATASET_DIR           = DATA_DIR / "volleyball_" / "videos"

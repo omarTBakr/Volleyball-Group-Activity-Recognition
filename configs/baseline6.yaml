@@ -10,10 +10,10 @@ defaults:
 batch_size: 8          # effective/macro batch (optimizer steps at this size)
 micro_batch_size: 4    # clips per forward/backward; must divide batch_size
 n_frames: 9
-num_workers: 4
+num_workers: 8
 prefetch_factor: 2
 pin_memory: false
-data_parallel: true
+data_parallel: false
 
 # ── Scene-level temporal model ───────────────────────────────────────────────
 # B6 pools players per frame BEFORE the LSTM (course definition: LSTM on the
