@@ -4,7 +4,7 @@ A deep learning pipeline for **group activity recognition** in volleyball videos
 
 ![Sample clip](plots/videoAnnot.png)
 
-The snapshot shows the output of `python -m src.data.visualize_data` with `video_fully_annotated=True`. 
+The snapshot shows the output of `python -m src.data.visualize_data` with `video_fully_annotated=True`.
 
 ---
 
@@ -12,17 +12,29 @@ The snapshot shows the output of `python -m src.data.visualize_data` with `video
 
 - **Dataset**: 55 volleyball videos, 4,830 clips, two annotation levels — 8 group activities (scene-level) and 9 person actions (player-level).
 - **Baselines**: 8 progressively complex models (B1–B8) sharing a single data loader. **B1, B3, B4, B5, and B6 are complete; B7 and B8 are pending.**
-- **Current test scores**: B6 accuracy **70.5%** / macro-F1 **0.686** (best on both metrics); B5 66.3% / 0.619; B4 66.1% / 0.673; B1 62.6% / 0.630; B3 60.7% / 0.589 (see [Results](#results)).
 - **Stack**: PyTorch + Hydra config + TensorBoard logging; multi-GPU via `nn.DataParallel`; Kaggle dual-T4 ready.
 - **Paper**: Ibrahim et al., *A Hierarchical Deep Temporal Model for Group Activity Recognition*, CVPR 2016.
+
+### Results Summary
+
+| Baseline | Idea | Test Acc | Macro F1 | Test Loss |
+|----------|------|---------:|---------:|----------:|
+| B1 | Single middle frame → fine-tuned ResNet-50 | 62.60% | 0.630 | 1.42 |
+| B3 | Person crops → frozen backbone → concat-pool → MLP | 60.73% | 0.589 | 1.09 |
+| B4 | 9 frames → frozen B1 backbone → LSTM | 66.12% | 0.673 | 1.05 |
+| B5 | Per-player LSTM → pool summaries → MLP | 66.34% | 0.619 | **0.97** |
+| **B6** | **Pool players per frame → scene LSTM + skip Conv1d** | **70.53%** | **0.686** | 1.04 |
+| B7 | Hierarchical: player LSTM₁ → pool per frame → scene LSTM₂ | *pending* | | |
+| B8 | B7 + team-split pooling (6+6, concat) | *pending* | | |
+
+Per-baseline architecture, hyperparameters, and analysis: [Baselines & Results](#baselines--results).
 
 ---
 
 ## Table of Contents
 
 - [Quick Start](#quick-start)
-- [Baseline Models](#baseline-models)
-- [Results](#results)
+- [Baselines & Results](#baselines--results)
 - [Dataset](#dataset)
 - [Data Pipeline](#data-pipeline)
 - [Data Loader API](#data-loader-api)
@@ -87,11 +99,13 @@ uv run python -m utils.evaluate --model baseline5_stage_b_run4.pt   --baseline b
 uv run python -m utils.evaluate --model baseline6_stage_b_run2.pt   --baseline baseline6 --batch-size 4
 ```
 
-Produces confusion matrix, classification report, precision–recall curves, and mAP under `plots/<baseline>/`. `--device cpu` forces CPU; `--batch-size` overrides the config's batch (B5 clips are 9×~12 crops each, so batch 4 is the 8 GB-GPU sweet spot). The evaluator **auto-detects saved architecture details** (B3/B5 pool mode, B4/B5 LSTM shape, B5 head width) from the checkpoint's tensor shapes, so legacy checkpoints and post-training YAML edits both load without changes.
+Produces confusion matrix, classification report, precision–recall curves, and mAP under `plots/<baseline>/`. `--device cpu` forces CPU; `--batch-size` overrides the config's batch (B5/B6 clips are 9×~12 crops each, so batch 4 is the 8 GB-GPU sweet spot). The evaluator **auto-detects saved architecture details** (pool mode, LSTM shape, head width, frame count) from the checkpoint's tensor shapes, so legacy checkpoints and post-training YAML edits both load without changes.
 
 ---
 
-## Baseline Models
+## Baselines & Results
+
+The ladder is a designed ablation — each rung isolates one component (person crops, player-level time, scene-level time, team structure):
 
 | Baseline | Status | Input | Temporal | Player-Level | Scene-Level |
 |----------|--------|-------|----------|--------------|-------------|
@@ -103,13 +117,14 @@ Produces confusion matrix, classification report, precision–recall curves, and
 | **B7** | 🔲 Pending | 9 frames (crops) | LSTM₁ per player + LSTM₂ | Max-pool per frame | LSTM₂ → 8 classes |
 | **B8** | 🔲 Pending | 9 frames (crops) | LSTM₁ per player + LSTM₂ | Team-split pool (6+6) | Concat teams → LSTM₂ |
 
----
-
-## Results
+Each completed baseline below follows the same template: **architecture → test metrics → analysis**, with hyperparameters and evaluation plots collapsed.
 
 ### Baseline 1 — Single-Frame Image Classifier
 
-Training uses a two-stage strategy: a linear probe (head-only) followed by full fine-tuning with differential learning rates and cosine annealing. Hyperparameters live in `configs/baseline1.yaml`; current values:
+Fine-tunes a ResNet-50 on the middle frame of each clip to predict the 8 group activities. Training uses a two-stage strategy: a linear probe (head-only) followed by partial fine-tuning (layer3/4 + head) with differential learning rates and cosine annealing.
+
+<details>
+<summary><b>Hyperparameters</b> (<code>configs/baseline1.yaml</code>)</summary>
 
 | Hyperparameter | Value |
 |---|---|
@@ -122,6 +137,8 @@ Training uses a two-stage strategy: a linear probe (head-only) followed by full 
 | Weight Decay | 1e-4 |
 | Early Stopping Patience | 25 epochs |
 
+</details>
+
 #### Test Metrics
 
 | Metric | Value |
@@ -130,19 +147,27 @@ Training uses a two-stage strategy: a linear probe (head-only) followed by full 
 | Macro F1 | **0.630** |
 | Loss | 1.42 |
 
+A single frame with no person or temporal structure sets the floor for the ladder.
+
+<details>
+<summary><b>Evaluation plots</b></summary>
+
 | Confusion Matrix | Classification Report |
 |:---:|:---:|
 | ![Confusion Matrix](plots/baseline1/Confusion%20Matrix.png) | ![Classification Report](plots/baseline1/Classification%20Report.png) |
 | **Precision-Recall Curves** | **mAP & F1 per Class** |
 | ![Precision-Recall Curves](plots/baseline1/Precision-Recall%20Curves.png) | ![mAP & F1](plots/baseline1/mAP%20%26%20F1%20Score%20per%20Class.png) |
 
----
+</details>
 
-### Baseline 3 — Per-Player Crops → Frozen Backbone → Concat-Pool → MLP
+### Baseline 3 — Person Crops → Frozen Backbone → Concat-Pool → MLP
 
 A two-stage architecture. **Stage A** trains a ResNet-50 end-to-end on individual player crops to classify the 9 person actions (`blocking`, `digging`, …, `waiting`). **Stage B** freezes that backbone (with `fc = Identity`), passes the per-player crops of a clip through it to produce one `(P, 2048)` feature matrix per clip, applies concatenated max- and mean-pool across the player dimension to get a `(2 × 2048)`-wide vector, and trains a small MLP head to predict the 8 group activities.
 
 The concat pool gives the head two complementary signals: max captures *"is any player exhibiting feature k strongly?"* and mean captures *"what's the typical team level of feature k?"*. Class-weighted CrossEntropy is used in both stages to counter the heavy `standing` skew in Stage A (~70% of all crops) and the rare `l/r_winpoint` classes (~2.5× rarer than `spike/pass/set`) in Stage B.
+
+<details>
+<summary><b>Hyperparameters</b> (<code>configs/baseline3.yaml</code>)</summary>
 
 | Hyperparameter | Value |
 |---|---|
@@ -160,6 +185,8 @@ The concat pool gives the head two complementary signals: max captures *"is any 
 | Multi-GPU | `nn.DataParallel` when `n_gpus > 1` (Kaggle dual-T4 ready) |
 | Early Stopping Patience | 10 epochs per stage |
 
+</details>
+
 #### Test Metrics
 
 | Metric | Value |
@@ -172,17 +199,23 @@ Stage A reaches 70.4% best validation accuracy (macro F1 0.512) on the 9 person 
 
 **Known limitation:** the model overfits — final train accuracy is ~95% in both stages against ~58–70% validation. To be addressed with stronger augmentation / dropout / earlier stopping.
 
+<details>
+<summary><b>Evaluation plots</b></summary>
+
 | Confusion Matrix | Classification Report |
 |:---:|:---:|
 | ![Confusion Matrix](plots/baseline3/Confusion%20Matrix.png) | ![Classification Report](plots/baseline3/Classification%20Report.png) |
 | **Precision-Recall Curves** | **mAP & F1 per Class** |
 | ![Precision-Recall Curves](plots/baseline3/Precision-Recall%20Curves.png) | ![mAP & F1](plots/baseline3/mAP%20%26%20F1%20Score%20per%20Class.png) |
 
----
+</details>
 
 ### Baseline 4 — Temporal Image Classifier (Frozen B1 Backbone → LSTM)
 
 Each clip's 9-frame window is pushed through a **frozen** feature extractor loaded from Baseline 1's fine-tuned backbone (`utils/featureExtractor.py`), producing a `(9, 2048)` feature sequence per clip. A single-layer LSTM consumes the sequence and its final hidden state is classified into the 8 group activities by a small MLP head. Only the LSTM + head train (~5.4M parameters).
+
+<details>
+<summary><b>Hyperparameters</b> (<code>configs/baseline4.yaml</code>)</summary>
 
 | Hyperparameter | Value |
 |---|---|
@@ -196,6 +229,8 @@ Each clip's 9-frame window is pushed through a **frozen** feature extractor load
 | Class-weighted loss | inverse-frequency, label smoothing 0.01 |
 | Early Stopping | patience 10 (stopped at epoch 14; best epoch 4) |
 
+</details>
+
 #### Test Metrics
 
 | Metric | Value |
@@ -208,7 +243,8 @@ Adding temporal context over B1's own features is worth **+3.5 accuracy points /
 
 **Known limitation:** convergence is extremely fast (best validation F1 at epoch 4, train accuracy ~99% by epoch 14) — the same overfitting pattern as B1/B3, and the strongest argument yet for a shared regularization pass.
 
-Evaluation plots:
+<details>
+<summary><b>Evaluation plots</b></summary>
 
 | Confusion Matrix | Classification Report |
 |:---:|:---:|
@@ -216,11 +252,14 @@ Evaluation plots:
 | **Precision-Recall Curves** | **mAP & F1 per Class** |
 | ![Precision-Recall Curves](plots/baseline4/Precision-Recall%20Curves.png) | ![mAP & F1](plots/baseline4/mAP%20%26%20F1%20Score%20per%20Class.png) |
 
----
+</details>
 
-### Baseline 5 — Temporal Person-Level Model (Frozen B3 Backbone → Per-Player LSTM → Pool → MLP)
+### Baseline 5 — Temporal Person-Level Model (Per-Player LSTM → Pool → MLP)
 
 A two-stage temporal extension of B3. **Stage A** feeds each player's 9-crop sequence through B3's **frozen** Stage-A person-action backbone and trains a shared LSTM + head to classify the 9 person actions from the sequence's final hidden state. **Stage B** freezes the Stage-A model entirely, computes one LSTM summary per player per clip, pools the summaries across the player dimension with masked concat (max ‖ mean), and trains a small MLP to predict the 8 group activities. Padded player slots are excluded from both the loss and the pooling via the collate mask.
+
+<details>
+<summary><b>Hyperparameters</b> (<code>configs/baseline5.yaml</code>)</summary>
 
 | Hyperparameter | Value |
 |---|---|
@@ -235,6 +274,8 @@ A two-stage temporal extension of B3. **Stage A** feeds each player's 9-crop seq
 | Class-weighted loss | inverse-frequency, both stages; label smoothing 0.01 |
 | Early Stopping | patience 10 (Stage A: 25 epochs, best 15; Stage B: 34 epochs) |
 
+</details>
+
 #### Test Metrics (run 4)
 
 | Metric | Value |
@@ -243,9 +284,12 @@ A two-stage temporal extension of B3. **Stage A** feeds each player's 9-crop seq
 | Macro F1 | **0.619** |
 | Loss | 0.97 |
 
-**Analysis.** B5 posts the **best test accuracy of any baseline so far** (66.3% vs B4's 66.1%, B1's 62.6%, B3's 60.7%) and the best test loss (0.97), and it dominates on the core activities: spike F1 reaches **0.78–0.80** and set **0.71** on both sides — per-player temporal modeling clearly pays off over B3's single-frame crops and B4's scene-level features. Cross-activity confusion is nearly eliminated (a spike is almost never called a pass or set).
+**Analysis.** B5 posts the best test accuracy of baselines B1–B5 (66.3% vs B4's 66.1%, B1's 62.6%, B3's 60.7%) and the best test loss of the project (0.97), and it dominates on the core activities: spike F1 reaches **0.78–0.80** and set **0.71** on both sides — per-player temporal modeling clearly pays off over B3's single-frame crops and B4's scene-level features. Cross-activity confusion is nearly eliminated (a spike is almost never called a pass or set).
 
 The macro-F1 (0.619) nevertheless trails B4 (0.673), and the cause is a single failure mode: **`l_winpoint` / `r_winpoint` confusion — the worst left/right confusion of any baseline in this project**. `r_winpoint` collapses to 0.08 recall / 0.13 F1, with **83% of true `r_winpoint` clips predicted as `l_winpoint`** (and a further 13% of `l_winpoint` leaking the other way). The explanation is structural: max/mean pooling across all ~12 players is orderless and position-blind, so the pooled vector carries no signal about *which side of the net* the players are on. Pass/spike/set survive because the acting players' poses differ, but winpoint clips show both teams in near-identical celebration/standing poses — side identity is the *only* discriminative signal, and the pooling erases it. This is precisely the failure B8's team-split pooling (pool each team's 6 players separately, concatenate) is designed to fix.
+
+<details>
+<summary><b>Evaluation plots</b></summary>
 
 | Confusion Matrix | Classification Report |
 |:---:|:---:|
@@ -253,13 +297,16 @@ The macro-F1 (0.619) nevertheless trails B4 (0.673), and the cause is a single f
 | **Precision-Recall Curves** | **mAP & F1 per Class** |
 | ![Precision-Recall Curves](plots/baseline5/Precision-Recall%20Curves.png) | ![mAP & F1](plots/baseline5/mAP%20%26%20F1%20Score%20per%20Class.png) |
 
----
+</details>
 
 ### Baseline 6 — Scene-Level Temporal Model (Pool per Frame → LSTM → Skip Conv1d Fusion)
 
 B6 moves the temporal model from the player level (B5) to the **scene level**: each frame's player crops go through B3's **frozen** Stage-A backbone and are **masked max-pooled across players per frame**, producing a `(9, 2048)` scene sequence per clip. An LSTM consumes it, and — instead of using only the last hidden state — its 9 hidden states are concatenated **along the time axis** with a linear projection of the pooled per-frame features (skip connection), giving `(18, 512)`. A two-stage Conv1d with a global temporal kernel collapses this into a 128-dim clip summary.
 
 **Stage A** pretrains the LSTM + projection + Conv1d on the 9 person actions using single-player tracks (P=1, so the per-frame pooling is an identity). **Stage B** is two-phase, mirroring B1: a **linear probe** (temporal model frozen, MLP head only), then a **joint fine-tune** that unfreezes the LSTM/projection/Conv1d with differential learning rates. The ResNet extractor stays frozen throughout.
+
+<details>
+<summary><b>Hyperparameters</b> (<code>configs/baseline6.yaml</code>)</summary>
 
 | Hyperparameter | Value |
 |---|---|
@@ -276,6 +323,8 @@ B6 moves the temporal model from the player level (B5) to the **scene level**: e
 | Batch | effective 8 = micro 4 × 2 gradient-accumulation steps |
 | Class-weighted loss | inverse-frequency, both stages; label smoothing 0.01 |
 
+</details>
+
 #### Test Metrics (run 2)
 
 | Metric | Value |
@@ -290,11 +339,16 @@ The two-phase Stage B was decisive, and the phase curves prove why: the **linear
 
 Per-class, B6 is strong on the acting-player activities — spike F1 hits **0.86/0.82** (l/r) and set 0.72/0.69 — and it **halves B5's winpoint collapse without any team-aware pooling**: `r_winpoint` recall recovers from 0.08 to **0.47** (F1 0.13 → 0.49) and `l_winpoint` reaches F1 0.55. Scene-level temporal context evidently carries some side signal that per-player last-hidden summaries lost. Still, **left/right confusion is now the dominant remaining error across the board**: 47% of true `r_winpoint` goes to `l_winpoint`, l/r-pass leak 20–22% into each other, and 21% of `l_set` is called `r_set` — the model is often right about *what* happened but guesses *which side*. All-player max pooling remains side-blind; that is exactly B8's team-split target. Overfitting is the other standing issue (Stage A train F1 0.96 vs val 0.54; fine-tune train 0.93 vs val 0.64).
 
+<details>
+<summary><b>Evaluation plots</b></summary>
+
 | Confusion Matrix | Classification Report |
 |:---:|:---:|
 | ![Confusion Matrix](plots/baseline6/Confusion%20Matrix.png) | ![Classification Report](plots/baseline6/Classification%20Report.png) |
 | **Precision-Recall Curves** | **mAP & F1 per Class** |
 | ![Precision-Recall Curves](plots/baseline6/Precision-Recall%20Curves.png) | ![mAP & F1](plots/baseline6/mAP%20%26%20F1%20Score%20per%20Class.png) |
+
+</details>
 
 ---
 
@@ -517,6 +571,7 @@ Project1/
 │   ├── baseline3.yaml           # Hydra config for B3
 │   ├── baseline4.yaml           # Hydra config for B4
 │   ├── baseline5.yaml           # Hydra config for B5
+│   ├── baseline6.yaml           # Hydra config for B6
 │   └── transforms/
 │       ├── default_transforms.yaml  # FULL-FRAME baselines (B1, B4): 224×224 warp
 │       └── crop_transforms.yaml     # CROP baselines (B3, B5–B8): 224×224 warp
@@ -537,7 +592,10 @@ Project1/
 │   ├── baseline1.py             # B1: Two-stage fine-tuned ResNet50 (✅ done)
 │   ├── baseline3.py             # B3: Person-then-group crop classifier (✅ done)
 │   ├── baseline4.py             # B4: Frozen backbone → LSTM temporal classifier (✅ done)
-│   └── baseline5.py             # B5: Per-player LSTM → pooled group head (✅ done)
+│   ├── baseline5.py             # B5: Per-player LSTM → pooled group head (✅ done)
+│   ├── baseline6.py             # B6: Pooled-scene LSTM + skip Conv1d (✅ done)
+│   ├── baseline7.py             # B7: hierarchical two-LSTM model (🔲 stub)
+│   └── baseline8.py             # B8: B7 + team-split pooling (🔲 stub)
 │
 ├── utils/
 │   ├── utility.py               # Training/eval loop helpers + class-weight tools
@@ -556,12 +614,8 @@ Project1/
 ├── runs/                        # Hydra run outputs
 ├── logs/                        # Per-baseline TensorBoard + JSON metric logs
 └── plots/                       # Evaluation visualizations
-    ├── baseline1/               # B1 evaluation plots
-    │   ├── Confusion Matrix.png
-    │   ├── Classification Report.png
-    │   ├── Precision-Recall Curves.png
-    │   └── mAP & F1 Score per Class.png
-    └── baseline3/               # B3 evaluation plots (same four)
+    └── baseline{1,3,4,5,6}/     # Four plots per baseline: Confusion Matrix,
+                                 # Classification Report, PR Curves, mAP & F1
 ```
 
 ---
@@ -569,4 +623,4 @@ Project1/
 ## References
 
 - Ibrahim, M. S., Muralidharan, S., Deng, Z., Vahdat, A., & Mori, G. (2016). *A Hierarchical Deep Temporal Model for Group Activity Recognition*. **CVPR 2016**. [PDF](https://www.cs.sfu.ca/~mori/research/papers/ibrahim-cvpr16.pdf).
-- Volleyball dataset repository: [github.com/mostafa-saad/deep-activity-rec](https://github.com/mostafa-saad/deep-activity-rec).
+- Journal extension with group-style (team-split) pooling: [arXiv:1607.02643](https://arxiv.org/abs/1607.02643) — source of the B1–B8 baseline ablation and the accuracy numbers cited above.
