@@ -29,6 +29,8 @@ The snapshot shows the output of `uv run python -m src.data.visualize_data` with
 
 B7 (run 3, two-phase probe → joint fine-tune + AdamW) leads on every metric. B8 is implemented and shape-verified but not yet trained. Per-baseline architecture, hyperparameters, and analysis: [Baselines & Results](#baselines--results).
 
+**Contents:** [Quick Start](#quick-start) · [Baselines & Results](#baselines--results) · [Dataset](#dataset) · [Data Pipeline](#data-pipeline) · [Data Loader API](#data-loader-api) · [Project Structure](#project-structure) · [References](#references)
+
 ---
 
 ## Quick Start
@@ -112,6 +114,8 @@ The ladder is a designed ablation — each rung isolates one component (person c
 | **B8** | ⚙️ Implemented | 9 frames (crops) | Same as B7 | **Team-split** pool per frame (per-team, concat) | LSTM₂ → 8 classes |
 
 ⚙️ = model implemented and shape-verified but untrained (B8). Each completed baseline below follows the same template: **architecture → test metrics → analysis**, with hyperparameters and evaluation plots collapsed.
+
+**Two-stage training** (B3, B5, B6, B7, B8). **Stage A** pretrains the model on the **9 person-action** labels — representation learning that teaches the backbone/LSTM what players are doing. **Stage B** freezes (or, from B6 on, first freezes then fine-tunes) that model and trains a group head on the **8 scene classes**; the person labels are a means, the scene classifier is the goal.
 
 ### Baseline 1 — Single-Frame Image Classifier
 
