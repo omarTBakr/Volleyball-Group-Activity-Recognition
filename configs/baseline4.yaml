@@ -14,7 +14,7 @@ data_parallel: true
 
 # Single training stage: the backbone is frozen, only LSTM + head train.
 num_epochs: 50
-learning_rate: 1e-3           # SGD lr for the LSTM + classifier head
+learning_rate: 1e-3           # AdamW lr for the LSTM + head (fresh, on frozen features)
 weight_decay: 5e-4
 dropout: 0.3                  # MLP head (and between LSTM layers if > 1)
 early_stopping_patience: 10

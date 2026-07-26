@@ -23,30 +23,22 @@ from __future__ import annotations
 import os
 os.environ["MPLBACKEND"] = "Agg"
 
-import json
-
 import hydra
 import torch
 from omegaconf import DictConfig
 from torch import nn, optim
 from torch.utils.data import DataLoader
-from torch.utils.tensorboard import SummaryWriter
 
 from configs.labels import GROUP_ACTIVITY_TO_IDX, NUM_GROUP_ACTIVITIES
-from configs.path_config import LOGS_DIR
 from src.data.kaggle_data_loader import VolleyballDataset, collate_fn
 from utils.featureExtractor import FeatureExtractor
 from utils.load_model_config import build_scheduler, build_transforms
+from utils.trainer import Trainer
 from utils.utility import (
     get_device,
     group_activity_label_counts,
     inverse_freq_weights,
     load_model,
-    log_experiment_summary,
-    save_model,
-    test_one_epoch,
-    train_one_epoch,
-    validate_one_epoch,
 )
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -134,13 +126,8 @@ def train_test(cfg: DictConfig) -> None:
     device = get_device(cfg.device)
 
     # ── Logging ──────────────────────────────────────────────────────────
-    run_log_dir = LOGS_DIR / "baseline4"
-    run_log_dir.mkdir(parents=True, exist_ok=True)
-    run_count = len(list(run_log_dir.glob("*.json"))) + 1
-    run_id = f"run{run_count}"
-    writer = SummaryWriter(log_dir=run_log_dir / "tensorboard" / run_id)
-    metrics_history: list[dict] = []
-
+    run_id = Trainer.next_run_id("baseline4")
+    trainer = Trainer("baseline4", run_id, device=device)
     ckpt_name = f"baseline4_{run_id}.pt"
 
     # ── Data (full-image mode, 9-frame temporal window) ──────────────────
@@ -209,11 +196,17 @@ def train_test(cfg: DictConfig) -> None:
 
     # Only the LSTM + head train; the frozen extractor is excluded.
     trainable_params = [p for p in model.parameters() if p.requires_grad]
-    optimizer = optim.SGD(
+    # optimizer = optim.SGD(
+    #     trainable_params,
+    #     lr=cfg.learning_rate,
+    #     momentum=0.9,
+    #     nesterov=True,
+    #     weight_decay=cfg.get("weight_decay", 5e-4),
+    # )
+    # AdamW equivalent — trains a fresh LSTM + head on frozen features.
+    optimizer = optim.AdamW(
         trainable_params,
         lr=cfg.learning_rate,
-        momentum=0.9,
-        nesterov=True,
         weight_decay=cfg.get("weight_decay", 5e-4),
     )
     scheduler = build_scheduler(optimizer, cfg)
@@ -221,61 +214,24 @@ def train_test(cfg: DictConfig) -> None:
     n_trainable = sum(p.numel() for p in trainable_params)
     print(f"  Trainable parameters: {n_trainable:,}")
 
-    # ── Training loop ────────────────────────────────────────────────────
-    best_f1 = 0.0
-    patience = cfg.get("early_stopping_patience", 0)
-    epochs_without_improvement = 0
-
-    for epoch in range(cfg.num_epochs):
-        print(f"\n--- Epoch {epoch + 1}/{cfg.num_epochs} ---")
-
-        train_loss, train_acc, train_f1, _ = train_one_epoch(
-            model, train_loader, criterion, optimizer, device,
-            num_classes=NUM_GROUP_ACTIVITIES,
-            desc="Train[B4]",
-        )
-        val_loss, val_acc, val_f1, _ = validate_one_epoch(
-            model, val_loader, criterion, device,
-            num_classes=NUM_GROUP_ACTIVITIES,
-            desc="Val[B4]",
-        )
-
-        if scheduler:
-            scheduler.step()
-            writer.add_scalar("Learning_Rate", scheduler.get_last_lr()[0], epoch + 1)
-
-        writer.add_scalar("Loss/train", train_loss, epoch + 1)
-        writer.add_scalar("Loss/val", val_loss, epoch + 1)
-        writer.add_scalar("F1_Score/train", train_f1, epoch + 1)
-        writer.add_scalar("F1_Score/val", val_f1, epoch + 1)
-
-        print(f"Train -> Loss: {train_loss:.4f}, Acc: {train_acc:.4f}, F1: {train_f1:.4f}")
-        print(f"Val   -> Loss: {val_loss:.4f}, Acc: {val_acc:.4f}, F1: {val_f1:.4f}")
-
-        entry = {
-            "epoch": epoch + 1,
-            "train_loss": train_loss, "train_acc": train_acc, "train_f1": train_f1,
-            "val_loss": val_loss, "val_acc": val_acc, "val_f1": val_f1,
-            "learning_rate": scheduler.get_last_lr()[0] if scheduler else cfg.learning_rate,
-        }
-        metrics_history.append(entry)
-        with (run_log_dir / f"{run_id}.json").open("w") as f:
-            json.dump({"epochs": metrics_history}, f, indent=4)
-
-        if val_f1 > best_f1:
-            best_f1 = val_f1
-            epochs_without_improvement = 0
-            save_model(ckpt_name, epoch + 1, model_inner, optimizer, val_loss,
-                       class_to_idx=GROUP_ACTIVITY_TO_IDX)
-            print(f"  ✓ New best model saved (F1: {best_f1:.4f})")
-        else:
-            epochs_without_improvement += 1
-            if patience > 0 and epochs_without_improvement >= patience:
-                print(f"  ⏹ Early stopping — no improvement for {patience} epochs.")
-                break
+    # ── Training (single stage) ──────────────────────────────────────────
+    best_f1 = trainer.run_stage(
+        model=model,
+        save_ref=model_inner,
+        train_loader=train_loader,
+        val_loader=val_loader,
+        criterion=criterion,
+        optimizer=optimizer,
+        scheduler=scheduler,
+        num_classes=NUM_GROUP_ACTIVITIES,
+        num_epochs=cfg.num_epochs,
+        checkpoint_name=ckpt_name,
+        class_to_idx=GROUP_ACTIVITY_TO_IDX,
+        patience=cfg.get("early_stopping_patience", 0),
+        desc="B4",
+    )
 
     # ── Test best model ──────────────────────────────────────────────────
-    print("\n--- Testing best model ---")
     best_model = TemporalImageClassifier(
         num_classes=NUM_GROUP_ACTIVITIES,
         backbone_name=cfg.model.name,
@@ -288,23 +244,12 @@ def train_test(cfg: DictConfig) -> None:
     if use_dp:
         best_model = nn.DataParallel(best_model)
 
-    test_loss, test_acc, test_f1, _ = test_one_epoch(
-        best_model, test_loader, criterion, device,
+    trainer.run_test(
+        model=best_model,
+        test_loader=test_loader,
+        criterion=criterion,
         num_classes=NUM_GROUP_ACTIVITIES,
-        desc="Test[B4]",
-    )
-    print(f"Final Test -> Loss: {test_loss:.4f}, Acc: {test_acc:.4f}, F1: {test_f1:.4f}")
-
-    with (run_log_dir / f"{run_id}.json").open("r+") as f:
-        data = json.load(f)
-        data["test"] = {"test_loss": test_loss, "test_acc": test_acc, "test_f1": test_f1}
-        f.seek(0)
-        json.dump(data, f, indent=4)
-        f.truncate()
-
-    log_experiment_summary(
-        writer=writer,
-        run_id=run_id,
+        best_val_f1=best_f1,
         hparam_dict={
             "baseline":                "baseline4",
             "batch_size":              cfg.batch_size,
@@ -321,13 +266,9 @@ def train_test(cfg: DictConfig) -> None:
             "backbone":                cfg.model.name,
             "backbone_checkpoint":     str(cfg.model.get("checkpoint")),
         },
-        test_f1=test_f1,
-        test_acc=test_acc,
-        test_loss=test_loss,
-        best_val_f1=best_f1,
     )
 
-    writer.close()
+    trainer.close()
 
 
 if __name__ == "__main__":

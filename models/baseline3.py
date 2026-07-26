@@ -28,14 +28,11 @@ from __future__ import annotations
 import os
 os.environ["MPLBACKEND"] = "Agg"
 
-import json
-
 import hydra
 import torch
 from omegaconf import DictConfig
 from torch import nn, optim
 from torch.utils.data import DataLoader
-from torch.utils.tensorboard import SummaryWriter
 from torchvision import models
 
 from configs.labels import (
@@ -44,20 +41,16 @@ from configs.labels import (
     NUM_PERSON_ACTIONS,
     PERSON_ACTION_TO_IDX,
 )
-from configs.path_config import LOGS_DIR
 from src.data.kaggle_data_loader import VolleyballDataset, collate_fn
+from src.data.unpackers import group_crop_unpack, person_frame_unpack
 from utils.load_model_config import build_scheduler, build_transforms
+from utils.trainer import Trainer
 from utils.utility import (
     get_device,
     group_activity_label_counts,
     inverse_freq_weights,
     load_model,
-    log_experiment_summary,
     person_action_label_counts,
-    save_model,
-    test_one_epoch,
-    train_one_epoch,
-    validate_one_epoch,
 )
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -204,61 +197,15 @@ class GroupActivityModel(nn.Module):
         return self.classifier(pooled)
 
 
-# ═════════════════════════════════════════════════════════════════════════════
-# ══ 2. BATCH UNPACKERS (plug into utils.utility.train/validate/test_one_epoch) ══
-# ═════════════════════════════════════════════════════════════════════════════
+# ══ 2. BATCH UNPACKERS ══
 #
-# The shared epoch driver in utils.utility expects each batch to be reduced to
-# ``(model_inputs_tuple, target_tensor)`` — the unpacker is the only per-task
-# code needed to use it. Crop-mode collate returns a 4-tuple
-# ``(crops, person_labels, group_labels, masks)``; each stage of baseline3
-# (and other crop-mode baselines) needs its own one-liner unpacker.
-
-
-def _crop_batch_invalid(crops: torch.Tensor) -> bool:
-    """Crop-mode collate returns torch.empty(0) when the whole batch has no players."""
-    return crops.dim() < 5 or crops.numel() == 0
-
-
-def stage_a_unpack(batch):
-    """
-    Person-action unpacker: flatten (B, P) → (B*P,), drop padded slots via
-    the mask, and emit ``((valid_crops,), valid_labels)`` for the standard
-    single-input PersonActionResNet forward.
-    """
-    if not batch:
-        return None
-    crops, person_labels, _group_labels, masks = batch
-    if _crop_batch_invalid(crops):
-        return None
-
-    B, P, C, H, W = crops.shape
-    flat = crops.view(B * P, C, H, W)
-    labels = person_labels.view(B * P)
-    mask = masks.view(B * P)
-
-    valid = mask.nonzero(as_tuple=True)[0]
-    if valid.numel() == 0:
-        return None
-    return (flat[valid],), labels[valid]
-
-
-def stage_b_unpack(batch):
-    """
-    Group-activity unpacker: keep ``crops`` and ``masks`` together as the
-    multi-arg input to GroupActivityModel.forward(crops, masks), targets are
-    the per-clip group labels.
-    """
-    if not batch:
-        return None
-    crops, _person_labels, group_labels, masks = batch
-    if _crop_batch_invalid(crops):
-        return None
-    return (crops, masks), group_labels
-
-
-# Class-weight helpers (inverse_freq_weights, person_action_label_counts,
-# group_activity_label_counts) now live in utils.utility — see imports above.
+# The canonical unpackers live in src.data.unpackers (shared across baselines).
+# B3 works on single middle-frame crops: Stage A is per-player action
+# classification (single-input model), Stage B is group classification via
+# forward(crops, masks). Re-exported under the historical names so external
+# importers (utils.evaluate) keep resolving them from this module.
+stage_a_unpack = person_frame_unpack
+stage_b_unpack = group_crop_unpack
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -272,13 +219,8 @@ def train_test(cfg: DictConfig) -> None:
     device = get_device(cfg.device)
 
     # ── Logging ──────────────────────────────────────────────────────────
-    run_log_dir = LOGS_DIR / "baseline3"
-    run_log_dir.mkdir(parents=True, exist_ok=True)
-    run_count = len(list(run_log_dir.glob("*.json"))) + 1
-    run_id = f"run{run_count}"
-    writer = SummaryWriter(log_dir=run_log_dir / "tensorboard" / run_id)
-    metrics_history: list[dict] = []
-
+    run_id = Trainer.next_run_id("baseline3")
+    trainer = Trainer("baseline3", run_id, device=device)
     stage_a_ckpt = f"baseline3_stage_a_{run_id}.pt"
     stage_b_ckpt = f"baseline3_stage_b_{run_id}.pt"
 
@@ -351,64 +293,37 @@ def train_test(cfg: DictConfig) -> None:
     else:
         criterion_a = nn.CrossEntropyLoss(label_smoothing=cfg.get("label_smoothing", 0.0))
 
-    optimizer_a = optim.SGD(
+    # optimizer_a = optim.SGD(
+    #     person_model.parameters(),
+    #     lr=stage_a_cfg.learning_rate,
+    #     momentum=0.9,
+    #     nesterov=True,
+    #     weight_decay=stage_a_cfg.get("weight_decay", 5e-4),
+    # )
+    # AdamW equivalent — Stage A fine-tunes the full ResNet, so use an
+    # AdamW-scale lr from the config (1e-4; 1e-3 would wreck pretrained features).
+    optimizer_a = optim.AdamW(
         person_model.parameters(),
         lr=stage_a_cfg.learning_rate,
-        momentum=0.9,
-        nesterov=True,
         weight_decay=stage_a_cfg.get("weight_decay", 5e-4),
     )
 
-    best_f1_a = 0.0
-    patience_a = stage_a_cfg.get("early_stopping_patience", 0)
-    epochs_without_improvement = 0
-    global_epoch = 0
-
-    for epoch in range(stage_a_cfg.num_epochs):
-        global_epoch += 1
-        print(f"\n--- Stage A · Epoch {epoch + 1}/{stage_a_cfg.num_epochs} ---")
-
-        train_loss, train_acc, train_f1, _ = train_one_epoch(
-            person_model, train_loader, criterion_a, optimizer_a, device,
-            batch_unpack=stage_a_unpack,
-            num_classes=NUM_PERSON_ACTIONS,
-            desc="Train[A]",
-        )
-        val_loss, val_acc, val_f1, _ = validate_one_epoch(
-            person_model, val_loader, criterion_a, device,
-            batch_unpack=stage_a_unpack,
-            num_classes=NUM_PERSON_ACTIONS,
-            desc="Val[A]",
-        )
-
-        writer.add_scalar("StageA/Loss/train", train_loss, global_epoch)
-        writer.add_scalar("StageA/Loss/val", val_loss, global_epoch)
-        writer.add_scalar("StageA/F1/train", train_f1, global_epoch)
-        writer.add_scalar("StageA/F1/val", val_f1, global_epoch)
-
-        print(f"Train -> Loss: {train_loss:.4f}, Acc: {train_acc:.4f}, F1: {train_f1:.4f}")
-        print(f"Val   -> Loss: {val_loss:.4f}, Acc: {val_acc:.4f}, F1: {val_f1:.4f}")
-
-        metrics_history.append({
-            "epoch": global_epoch, "stage": "A",
-            "train_loss": train_loss, "train_acc": train_acc, "train_f1": train_f1,
-            "val_loss": val_loss, "val_acc": val_acc, "val_f1": val_f1,
-            "learning_rate": stage_a_cfg.learning_rate,
-        })
-        with (run_log_dir / f"{run_id}.json").open("w") as f:
-            json.dump({"epochs": metrics_history}, f, indent=4)
-
-        if val_f1 > best_f1_a:
-            best_f1_a = val_f1
-            epochs_without_improvement = 0
-            save_model(stage_a_ckpt, global_epoch, person_inner, optimizer_a, val_loss,
-                       class_to_idx=PERSON_ACTION_TO_IDX)
-            print(f"  ✓ New best Stage-A model saved (person F1: {best_f1_a:.4f})")
-        else:
-            epochs_without_improvement += 1
-            if patience_a > 0 and epochs_without_improvement >= patience_a:
-                print(f"  ⏹ Stage-A early stopping — no improvement for {patience_a} epochs.")
-                break
+    best_f1_a = trainer.run_stage(
+        model=person_model,
+        save_ref=person_inner,
+        train_loader=train_loader,
+        val_loader=val_loader,
+        criterion=criterion_a,
+        optimizer=optimizer_a,
+        num_classes=NUM_PERSON_ACTIONS,
+        num_epochs=stage_a_cfg.num_epochs,
+        checkpoint_name=stage_a_ckpt,
+        class_to_idx=PERSON_ACTION_TO_IDX,
+        batch_unpack=stage_a_unpack,
+        patience=stage_a_cfg.get("early_stopping_patience", 0),
+        stage="A",
+        desc="B3-A",
+    )
 
     # ═════════════════════════════════════════════════════════════════════
     # STAGE B — group-activity fine-tune (8 classes)
@@ -461,75 +376,40 @@ def train_test(cfg: DictConfig) -> None:
     else:
         criterion_b = nn.CrossEntropyLoss(label_smoothing=cfg.get("label_smoothing", 0.0))
 
-    optimizer_b = optim.SGD(
+    # optimizer_b = optim.SGD(
+    #     group_inner.classifier.parameters(),
+    #     lr=stage_b_cfg.learning_rate,
+    #     momentum=0.9,
+    #     nesterov=True,
+    #     weight_decay=stage_b_cfg.get("weight_decay", 5e-4),
+    # )
+    # AdamW equivalent — Stage B trains only the MLP head on frozen features.
+    optimizer_b = optim.AdamW(
         group_inner.classifier.parameters(),
         lr=stage_b_cfg.learning_rate,
-        momentum=0.9,
-        nesterov=True,
         weight_decay=stage_b_cfg.get("weight_decay", 5e-4),
     )
     scheduler_b = build_scheduler(optimizer_b, cfg)
 
-    best_f1_b = 0.0
-    patience_b = stage_b_cfg.get("early_stopping_patience", 0)
-    epochs_without_improvement = 0
-
-    for epoch in range(stage_b_cfg.num_epochs):
-        global_epoch += 1
-        print(f"\n--- Stage B · Epoch {epoch + 1}/{stage_b_cfg.num_epochs} ---")
-
-        train_loss, train_acc, train_f1, _ = train_one_epoch(
-            group_model, train_loader, criterion_b, optimizer_b, device,
-            batch_unpack=stage_b_unpack,
-            num_classes=NUM_GROUP_ACTIVITIES,
-            desc="Train[B]",
-        )
-        val_loss, val_acc, val_f1, _ = validate_one_epoch(
-            group_model, val_loader, criterion_b, device,
-            batch_unpack=stage_b_unpack,
-            num_classes=NUM_GROUP_ACTIVITIES,
-            desc="Val[B]",
-        )
-
-        if scheduler_b:
-            scheduler_b.step()
-            writer.add_scalar("StageB/LR", scheduler_b.get_last_lr()[0], global_epoch)
-
-        writer.add_scalar("StageB/Loss/train", train_loss, global_epoch)
-        writer.add_scalar("StageB/Loss/val", val_loss, global_epoch)
-        writer.add_scalar("StageB/F1/train", train_f1, global_epoch)
-        writer.add_scalar("StageB/F1/val", val_f1, global_epoch)
-
-        print(f"Train -> Loss: {train_loss:.4f}, Acc: {train_acc:.4f}, F1: {train_f1:.4f}")
-        print(f"Val   -> Loss: {val_loss:.4f}, Acc: {val_acc:.4f}, F1: {val_f1:.4f}")
-
-        entry = {
-            "epoch": global_epoch, "stage": "B",
-            "train_loss": train_loss, "train_acc": train_acc, "train_f1": train_f1,
-            "val_loss": val_loss, "val_acc": val_acc, "val_f1": val_f1,
-        }
-        if scheduler_b:
-            entry["learning_rate"] = scheduler_b.get_last_lr()[0]
-        else:
-            entry["learning_rate"] = stage_b_cfg.learning_rate
-        metrics_history.append(entry)
-        with (run_log_dir / f"{run_id}.json").open("w") as f:
-            json.dump({"epochs": metrics_history}, f, indent=4)
-
-        if val_f1 > best_f1_b:
-            best_f1_b = val_f1
-            epochs_without_improvement = 0
-            save_model(stage_b_ckpt, global_epoch, group_inner, optimizer_b, val_loss,
-                       class_to_idx=GROUP_ACTIVITY_TO_IDX)
-            print(f"  ✓ New best Stage-B model saved (group F1: {best_f1_b:.4f})")
-        else:
-            epochs_without_improvement += 1
-            if patience_b > 0 and epochs_without_improvement >= patience_b:
-                print(f"  ⏹ Stage-B early stopping — no improvement for {patience_b} epochs.")
-                break
+    best_f1_b = trainer.run_stage(
+        model=group_model,
+        save_ref=group_inner,
+        train_loader=train_loader,
+        val_loader=val_loader,
+        criterion=criterion_b,
+        optimizer=optimizer_b,
+        scheduler=scheduler_b,
+        num_classes=NUM_GROUP_ACTIVITIES,
+        num_epochs=stage_b_cfg.num_epochs,
+        checkpoint_name=stage_b_ckpt,
+        class_to_idx=GROUP_ACTIVITY_TO_IDX,
+        batch_unpack=stage_b_unpack,
+        patience=stage_b_cfg.get("early_stopping_patience", 0),
+        stage="B",
+        desc="B3-B",
+    )
 
     # ── Test best Stage-B model ──────────────────────────────────────────
-    print("\n--- Testing best Stage-B model ---")
     fresh_person = PersonActionResNet(
         num_classes=NUM_PERSON_ACTIONS,
         backbone_name=cfg.model.name,
@@ -546,24 +426,13 @@ def train_test(cfg: DictConfig) -> None:
     if use_dp:
         best_group = nn.DataParallel(best_group)
 
-    test_loss, test_acc, test_f1, _ = test_one_epoch(
-        best_group, test_loader, criterion_b, device,
-        batch_unpack=stage_b_unpack,
+    trainer.run_test(
+        model=best_group,
+        test_loader=test_loader,
+        criterion=criterion_b,
         num_classes=NUM_GROUP_ACTIVITIES,
-        desc="Test[B]",
-    )
-    print(f"Final Test -> Loss: {test_loss:.4f}, Acc: {test_acc:.4f}, F1: {test_f1:.4f}")
-
-    with (run_log_dir / f"{run_id}.json").open("r+") as f:
-        data = json.load(f)
-        data["test"] = {"test_loss": test_loss, "test_acc": test_acc, "test_f1": test_f1}
-        f.seek(0)
-        json.dump(data, f, indent=4)
-        f.truncate()
-
-    log_experiment_summary(
-        writer=writer,
-        run_id=run_id,
+        batch_unpack=stage_b_unpack,
+        best_val_f1=best_f1_b,
         hparam_dict={
             "baseline":                "baseline3",
             "batch_size":              cfg.batch_size,
@@ -582,13 +451,9 @@ def train_test(cfg: DictConfig) -> None:
             "backbone":                cfg.model.name,
             "best_stage_a_val_f1":     best_f1_a,
         },
-        test_f1=test_f1,
-        test_acc=test_acc,
-        test_loss=test_loss,
-        best_val_f1=best_f1_b,
     )
 
-    writer.close()
+    trainer.close()
 
 
 if __name__ == "__main__":

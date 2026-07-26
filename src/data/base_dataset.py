@@ -91,6 +91,7 @@ class BaseVolleyballDataset(Dataset):
         full_image: bool = True,
         crop: bool = False,
         transform: Callable | None = None,
+        with_teams: bool = False,
     ) -> None:
         super().__init__()
 
@@ -100,12 +101,22 @@ class BaseVolleyballDataset(Dataset):
             raise ValueError(
                 "n_frames must be a positive odd number to have a clear middle frame.",
             )
+        if with_teams and not crop:
+            raise ValueError("with_teams=True requires crop=True (team ids describe players).")
 
         self.mode = mode
         self.n_frames = n_frames
         self.full_image = full_image
         self.crop = crop
         self.transform = transform
+        # Opt-in per-player team ids (0 = left court side, 1 = right), aligned
+        # with the person axis. OFF by default so every existing baseline sees
+        # the unchanged 3-tuple item / 4-tuple batch contract. B8's team-split
+        # pooling turns this on. Team membership is derived from the box
+        # center-x of the label-source frame, split at the median — NOT from
+        # the player ordering, which is track-id-sorted (see
+        # _get_persons_for_frame) and carries no court-side information.
+        self.with_teams = with_teams
 
         self._master_data: dict = self._load_master_data()
 
@@ -330,7 +341,7 @@ class BaseVolleyballDataset(Dataset):
     @staticmethod
     def _crop_boxes(
         image: Image.Image, boxes: np.ndarray, labels: np.ndarray,
-    ) -> tuple[list[Image.Image], list[int]]:
+    ) -> tuple[list[Image.Image], list[int], list[float]]:
         """
         Crop person regions from the image given precomputed boxes.
 
@@ -338,9 +349,15 @@ class BaseVolleyballDataset(Dataset):
         (detections were converted from ``[x, y, w, h]`` at precompute
         time); they are clamped to image bounds here, and degenerate
         boxes are skipped together with their labels.
+
+        Returns the kept crops, their labels, and each kept box's clamped
+        center-x (``(x1 + x2) / 2``). The center-x list stays aligned with
+        crops/labels through the same skip filtering, so team assignment
+        (see ``_team_ids``) lines up with the person axis exactly.
         """
         crops: list[Image.Image] = []
         kept_labels: list[int] = []
+        kept_cx: list[float] = []
         img_w, img_h = image.size
 
         for (x1, y1, x2, y2), label in zip(boxes.tolist(), labels.tolist()):
@@ -350,8 +367,28 @@ class BaseVolleyballDataset(Dataset):
                 continue
             crops.append(image.crop((x1, y1, x2, y2)))
             kept_labels.append(label)
+            kept_cx.append((x1 + x2) / 2.0)
 
-        return crops, kept_labels
+        return crops, kept_labels, kept_cx
+
+    @staticmethod
+    def _team_ids(center_x: Sequence[float]) -> torch.Tensor:
+        """Rank-based left/right team split from box center-x → int64 ``(P,)``.
+
+        The paper's recipe: order players by x, first half = one team. The
+        ``P // 2`` leftmost players get team 0, the rest team 1. Ties break
+        by stable sort; an odd count puts the extra player on the right
+        (team 1). Returned in the ORIGINAL player order (track-id order), so
+        it aligns with the crops and person labels — not sorted by x.
+        """
+        p = len(center_x)
+        teams = torch.ones(p, dtype=torch.long)  # default right; left half overwritten
+        if p <= 1:
+            teams.zero_()  # a lone player can't be split — call it team 0
+            return teams
+        order = np.argsort(np.asarray(center_x, dtype=np.float64), kind="stable")
+        teams[order[: p // 2].tolist()] = 0
+        return teams
 
     # ── Dataset interface ─────────────────────────────────────────────────
 
@@ -413,6 +450,24 @@ class BaseVolleyballDataset(Dataset):
             return images[0], group_label
         return torch.stack(images, dim=0), group_label
 
+    def _empty_crop(self, group_label: int):
+        """Return the mode-appropriate empty-crop item (teams-aware)."""
+        empty, empty_l = torch.empty(0), torch.empty(0, dtype=torch.long)
+        if self.with_teams:
+            return empty, empty_l, group_label, torch.empty(0, dtype=torch.long)
+        return empty, empty_l, group_label
+
+    def _pack_crop(self, crops_t, labels_t, group_label: int, center_x):
+        """Assemble a crop item, appending team ids when ``with_teams``.
+
+        ``center_x`` is the per-player box center-x of the SAME frame that
+        produced ``labels_t``, so the team split aligns with the person axis.
+        """
+        if not self.with_teams:
+            return crops_t, labels_t, group_label
+        teams = self._team_ids(center_x) if len(center_x) else torch.empty(0, dtype=torch.long)
+        return crops_t, labels_t, group_label, teams
+
     def _getitem_crop(
         self,
         video_id: str,
@@ -420,59 +475,65 @@ class BaseVolleyballDataset(Dataset):
         frame_names: list[str],
         persons_per_frame: dict[str, tuple[np.ndarray, np.ndarray]],
         group_label: int,
-    ) -> tuple[torch.Tensor, torch.Tensor, int]:
+    ) -> tuple:
         """Load cropped person images and return as tensor(s)."""
         _tf = self.transform or ToTensor()
 
         if self.n_frames == 1:
             middle_frame = frame_names[len(frame_names) // 2] if frame_names else None
             if middle_frame is None:
-                return torch.empty(0), torch.empty(0, dtype=torch.long), group_label
+                return self._empty_crop(group_label)
 
             img = self._load_image(video_id, clip_id, middle_frame)
             boxes, labels = persons_per_frame[middle_frame]
-            crops, person_labels = self._crop_boxes(img, boxes, labels)
+            crops, person_labels, center_x = self._crop_boxes(img, boxes, labels)
             crops = [_tf(c) for c in crops]
 
             if not crops:
-                return torch.empty(0), torch.empty(0, dtype=torch.long), group_label
+                return self._empty_crop(group_label)
 
-            return (
+            return self._pack_crop(
                 torch.stack(crops, dim=0),                       # (P, C, H, W)
                 torch.tensor(person_labels, dtype=torch.long),   # (P,)
                 group_label,
+                center_x,
             )
 
         # Temporal crops — use tracking data per frame for accurate boxes
         all_frame_crops = []
         all_frame_labels: list[list[int] | None] = []
+        all_frame_cx: list[list[float] | None] = []
 
         for fname in frame_names:
             img = self._load_image(video_id, clip_id, fname)
             boxes, labels = persons_per_frame[fname]
-            crops, person_labels = self._crop_boxes(img, boxes, labels)
+            crops, person_labels, center_x = self._crop_boxes(img, boxes, labels)
             crops = [_tf(c) for c in crops]
 
             if crops:
                 all_frame_crops.append(torch.stack(crops, dim=0))  # (P, C, H, W)
                 all_frame_labels.append(person_labels)
+                all_frame_cx.append(center_x)
             else:
                 all_frame_crops.append(None)
                 all_frame_labels.append(None)
+                all_frame_cx.append(None)
 
         valid_frames = [f for f in all_frame_crops if f is not None]
         if not valid_frames:
-            return torch.empty(0), torch.empty(0, dtype=torch.long), group_label
+            return self._empty_crop(group_label)
 
-        # Person labels come from the frame nearest to the MIDDLE (annotated
-        # target) frame that has crops — actions change within a clip, and the
-        # middle frame is what the annotations describe.
+        # Person labels (and team ids) come from the frame nearest to the
+        # MIDDLE (annotated target) frame that has crops — actions change
+        # within a clip, and the middle frame is what the annotations describe.
         mid = len(frame_names) // 2
-        person_labels = next(
-            all_frame_labels[mid + off]
+        label_off = next(
+            off
             for off in sorted(range(-mid, len(frame_names) - mid), key=abs)
             if 0 <= mid + off < len(all_frame_labels) and all_frame_labels[mid + off] is not None
         )
+        person_labels = all_frame_labels[mid + label_off]
+        center_x = all_frame_cx[mid + label_off]
 
         # Frames can carry different person counts (tracking dropouts /
         # detection fallback) — zero-pad each frame to the clip max so the
@@ -485,10 +546,11 @@ class BaseVolleyballDataset(Dataset):
                 for f in valid_frames
             ]
 
-        return (
+        return self._pack_crop(
             torch.stack(valid_frames, dim=0),                    # (T, P, C, H, W)
             torch.tensor(person_labels, dtype=torch.long),       # (P,)
             group_label,
+            center_x,
         )
 
 
@@ -555,9 +617,11 @@ def collate_fn(batch: list[tuple[Any, ...]]) -> tuple[torch.Tensor, ...]:
     """
     Custom collate function for variable numbers of player crops per clip.
 
-    Handles batches from both full-image mode (2-tuples) and crop mode
-    (3-tuples).  For crop mode, pads the player dimension to the maximum
-    count in the batch and returns a mask indicating valid players.
+    Handles batches from full-image mode (2-tuple items), crop mode
+    (3-tuple items), and crop mode with team ids (4-tuple items, when the
+    dataset was built with ``with_teams=True``).  For crop mode, pads the
+    player dimension to the maximum count in the batch and returns a mask
+    indicating valid players.
 
     Returns
     -------
@@ -566,6 +630,13 @@ def collate_fn(batch: list[tuple[Any, ...]]) -> tuple[torch.Tensor, ...]:
 
     For crop mode:
         ``(crops_batch, person_labels_batch, group_labels_batch, masks_batch)``
+
+    For crop mode with team ids (``with_teams=True``):
+        ``(..., masks_batch, team_ids_batch)`` — one extra tensor, shape
+        ``(B, max_players)``, values 0/1 for real players and -1 for padded
+        slots (aligned with ``masks_batch``). The first four elements are
+        byte-for-byte the same as the no-teams contract, so existing
+        4-tuple unpackers keep working; only team-aware code reads the 5th.
 
     """
     if not batch:
@@ -588,13 +659,35 @@ def collate_fn(batch: list[tuple[Any, ...]]) -> tuple[torch.Tensor, ...]:
 
         return padded_images, torch.tensor(labels, dtype=torch.long)
 
-    # Crop mode — variable number of players
-    crops_list, person_labels_list, group_labels = zip(*batch)
+    # Crop mode — variable number of players. Items are 3-tuples normally,
+    # or 4-tuples (…, team_ids) when the dataset has with_teams=True.
+    with_teams = len(batch[0]) == 4
+    if with_teams:
+        crops_list, person_labels_list, group_labels, teams_list = zip(*batch)
+    else:
+        crops_list, person_labels_list, group_labels = zip(*batch)
+
     padded_crops, padded_labels, masks = _pad_and_stack_crops(crops_list, person_labels_list)
 
-    return (
+    out = (
         padded_crops,
         padded_labels,
         torch.tensor(group_labels, dtype=torch.long),
         masks,
     )
+    if not with_teams:
+        return out
+
+    # Pad team ids onto the mask grid: -1 for padded/invalid slots, and the
+    # per-item real players (masks[i].sum() of them) filled from teams[:k].
+    # Same k the label padding uses, so team ids line up with person labels.
+    if masks.dim() == 2:
+        padded_teams = torch.full(masks.shape, -1, dtype=torch.long)
+        for i, teams in enumerate(teams_list):
+            k = int(masks[i].sum())
+            if k > 0 and teams.numel() > 0:
+                padded_teams[i, :k] = teams[:k]
+    else:
+        padded_teams = torch.empty(0, dtype=torch.long)
+
+    return out + (padded_teams,)

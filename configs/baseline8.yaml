@@ -1,0 +1,92 @@
+defaults:
+  - _self_
+  # Crop-specific pipeline: warps tall player crops straight to 224×224.
+  - transforms: crop_transforms.yaml
+
+# B8 shares B5/B6/B7's crop-mode data pipeline.  Each clip yields n_frames × P
+# crops (9 × ~12 ≈ 108 images).  Gradient accumulation keeps the EFFECTIVE
+# batch at batch_size while only micro_batch_size clips are ever
+# materialized at once.
+batch_size: 8          # effective/macro batch (optimizer steps at this size)
+micro_batch_size: 4    # clips per forward/backward; must divide batch_size
+n_frames: 9
+num_workers: 4
+prefetch_factor: 2
+pin_memory: false
+data_parallel: false
+
+# ── Hierarchical two-LSTM model with TEAM-SPLIT pooling ─────────────────────
+# B8 = B7 + group-style pooling: LSTM 1 per player over time, then per frame
+# each TEAM's players are pooled separately (via team_ids from the with_teams
+# loader) and the two team vectors are concatenated for LSTM 2. Both of B7's
+# skip connections (player feature-axis, scene time-axis + Conv1d) are kept.
+lstm1:
+  hidden_dim: 512        # H1; per-player representation = 2·H1 = 1024
+  num_layers: 1
+
+lstm2:
+  hidden_dim: 512        # H2; clip summary = H2 // 4 = 128
+
+# Per-team aggregation across a team's players (Stage B only — Stage A trains
+# on P=1 tracks and never pools). A team pools to 2·H1 (max/mean) or 4·H1
+# (concat); the two teams concatenate, so LSTM 2's input is 4·H1 (max/mean) or
+# 8·H1 (concat).
+pool: "concat"
+
+dropout: 0.3             # feature dropout (after backbone) + action-head dropout
+label_smoothing: 0
+
+# ── Stage A: person-action pretraining of LSTM 1 (9 classes) ────────────────
+# Frozen backbone → per-player track through LSTM 1 + skip projection →
+# 9-way head from the last timestep.  LSTM 1, projection, and head train.
+stage_a:
+  num_epochs: 50
+  learning_rate: 1e-3         # AdamW lr for the fresh LSTM 1 + projection + head
+  weight_decay: 5e-4
+  early_stopping_patience: 15
+  class_weighted_loss: true   # counters the ~68% "standing" majority
+
+# ── Stage B: scene LSTM 2 + fusion + head (8 classes), two phases ───────────
+# Mirrors B6's training scheme.
+#   Phase 1 (probe): player model (LSTM 1 + projection) frozen; the fresh
+#   scene modules (LSTM 2, scene projection, Conv1d fusion, MLP head) train
+#   at flat warmup_lr.
+#   Phase 2 (joint fine-tune): LSTM 1 + player projection unfrozen with
+#   differential LRs — player machinery at learning_rate, scene modules at
+#   learning_rate × head_lr_multiplier.  The cosine schedule (below) applies
+#   to phase 2.
+# The ResNet extractor and Stage A's action head stay frozen in both phases.
+stage_b:
+  warmup_epochs: 10       # phase-1 probe epochs
+  # AdamW-scale LRs (matching B7). Probe = fresh scene modules; phase-2 player =
+  # pretrained LSTM 1 (lower lr so AdamW doesn't wreck it).
+  warmup_lr: 1e-3         # phase-1 scene-module lr (flat)
+  num_epochs: 50          # phase-2 joint fine-tune epochs
+  learning_rate: 1e-4     # phase-2 player (LSTM 1 + projection) lr
+  head_lr_multiplier: 10  # phase-2 scene-module lr = 1e-4 × 10 = 1e-3
+  weight_decay: 5e-4
+  hidden_dim: 512         # MLP hidden width (input = lstm2_hidden//4 = 128)
+  dropout: 0.2
+  early_stopping_patience: 15
+  class_weighted_loss: true   # l/r_winpoint ~2.5× rarer
+
+# Cosine schedule applies to Stage B's phase-2 (joint fine-tune) optimizer;
+# Stage A and the phase-1 probe keep flat LRs.
+lr_scheduler:
+  name: CosineAnnealingLR
+  T_max: ${stage_b.num_epochs}
+  eta_min: 1e-5
+
+model:
+  # Frozen feature-extractor backbone ("resnet50" or "resnet101").
+  name: "resnet50"
+  # B8 re-uses B3's Stage-A person-action backbone as the frozen spatial
+  # feature extractor (same as B5/B6/B7).
+  checkpoint: "baseline3_stage_a_run2.pt"
+
+device: cuda
+seed: 42
+
+hydra:
+  run:
+    dir: ./runs/baseline8/${now:%Y-%m-%d}/${now:%H-%M-%S}

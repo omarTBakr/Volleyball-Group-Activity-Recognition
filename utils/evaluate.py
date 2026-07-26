@@ -359,11 +359,108 @@ def _build_model(baseline_name: str, cfg: DictConfig) -> nn.Module:
             dropout=cfg.stage_b.get("dropout", 0.3),
         )
 
-    # B7–B8 (hierarchical temporal baselines): add a branch here once their
-    # model classes exist in models/ — mirror the baseline5/6 pattern.
+    if baseline_name == "baseline7":
+        # Hierarchical two-LSTM model: evaluation scores the Stage-B group
+        # classifier (checkpoint = baseline7_stage_b_runN.pt); its state dict
+        # nests the Stage-A player model under "person.*". Architecture details
+        # (LSTM 1 hidden/layers, LSTM 2 hidden, frame count T, pool mode, MLP
+        # width) are read from the checkpoint via baseline7's own inference
+        # helpers, so the YAML can drift after training without breaking reloads.
+        from models.baseline7 import (
+            GroupTemporalClassifier,
+            PersonTemporalLSTM,
+            _checkpoint_state,
+            _group_dims,
+            _person_dims,
+        )
+
+        cfg_pool = cfg.get("pool", "max")
+        try:
+            state = _checkpoint_state(_PENDING_CKPT["filename"])
+            lstm1_hidden, lstm1_layers = _person_dims(state, prefix="person.")
+            lstm2_hidden, pool, T, head_hidden = _group_dims(state, cfg_pool=cfg_pool)
+            print(
+                f"  ⓘ Checkpoint architecture: LSTM1 {lstm1_hidden}×{lstm1_layers}, "
+                f"LSTM2 {lstm2_hidden}, T={T}, pool='{pool}', MLP hidden={head_hidden}."
+            )
+        except (FileNotFoundError, KeyError, TypeError):
+            lstm1_hidden, lstm1_layers = cfg.lstm1.hidden_dim, cfg.lstm1.num_layers
+            lstm2_hidden = cfg.lstm2.hidden_dim
+            T, pool = cfg.get("n_frames", 9), cfg_pool
+            head_hidden = cfg.stage_b.get("hidden_dim", 512)
+
+        person = PersonTemporalLSTM(
+            num_actions=NUM_PERSON_ACTIONS,
+            backbone_name=cfg.model.name,
+            checkpoint=None,
+            lstm_hidden=lstm1_hidden,
+            lstm_layers=lstm1_layers,
+            dropout=cfg.get("dropout", 0.3),
+            # Skip the ImageNet init — _load_checkpoint restores every
+            # weight (incl. the extractor backbone) from the Stage-B ckpt.
+            pretrained_backbone=False,
+        )
+        return GroupTemporalClassifier(
+            person_model=person,
+            num_classes=NUM_GROUP_ACTIVITIES,
+            lstm2_hidden=lstm2_hidden,
+            pool=pool,
+            T=T,
+            hidden_dim=head_hidden,
+            dropout=cfg.stage_b.get("dropout", 0.3),
+        )
+
+    if baseline_name == "baseline8":
+        # Team-split variant of baseline7: same hierarchical model + skips, but
+        # LSTM 2's input is 2× wider (two team vectors concatenated). Its own
+        # _group_dims recovers the pool from that doubled width. The Stage-B
+        # checkpoint nests the player model under "person.*".
+        from models.baseline8 import (
+            GroupTemporalClassifier,
+            PersonTemporalLSTM,
+            _checkpoint_state,
+            _group_dims,
+            _person_dims,
+        )
+
+        cfg_pool = cfg.get("pool", "max")
+        try:
+            state = _checkpoint_state(_PENDING_CKPT["filename"])
+            lstm1_hidden, lstm1_layers = _person_dims(state, prefix="person.")
+            lstm2_hidden, pool, T, head_hidden = _group_dims(state, cfg_pool=cfg_pool)
+            print(
+                f"  ⓘ Checkpoint architecture: LSTM1 {lstm1_hidden}×{lstm1_layers}, "
+                f"LSTM2 {lstm2_hidden}, T={T}, pool='{pool}' (team-split), MLP hidden={head_hidden}."
+            )
+        except (FileNotFoundError, KeyError, TypeError):
+            lstm1_hidden, lstm1_layers = cfg.lstm1.hidden_dim, cfg.lstm1.num_layers
+            lstm2_hidden = cfg.lstm2.hidden_dim
+            T, pool = cfg.get("n_frames", 9), cfg_pool
+            head_hidden = cfg.stage_b.get("hidden_dim", 512)
+
+        person = PersonTemporalLSTM(
+            num_actions=NUM_PERSON_ACTIONS,
+            backbone_name=cfg.model.name,
+            checkpoint=None,
+            lstm_hidden=lstm1_hidden,
+            lstm_layers=lstm1_layers,
+            dropout=cfg.get("dropout", 0.3),
+            pretrained_backbone=False,
+        )
+        return GroupTemporalClassifier(
+            person_model=person,
+            num_classes=NUM_GROUP_ACTIVITIES,
+            lstm2_hidden=lstm2_hidden,
+            pool=pool,
+            T=T,
+            hidden_dim=head_hidden,
+            dropout=cfg.stage_b.get("dropout", 0.3),
+        )
+
     raise ValueError(
         f"Evaluation not implemented for baseline: '{baseline_name}'. "
-        "Supported: baseline1, baseline3, baseline4, baseline5, baseline6."
+        "Supported: baseline1, baseline3, baseline4, baseline5, baseline6, "
+        "baseline7, baseline8."
     )
 
 
@@ -378,12 +475,18 @@ def _dataset_kwargs_for(baseline_name: str, cfg: DictConfig) -> dict[str, Any]:
     if baseline_name == "baseline4":
         return {"full_image": True, "n_frames": cfg.get("n_frames", 9)}
 
-    if baseline_name in ("baseline5", "baseline6"):
+    if baseline_name in ("baseline5", "baseline6", "baseline7"):
         return {"full_image": False, "crop": True, "n_frames": cfg.get("n_frames", 9)}
+
+    if baseline_name == "baseline8":
+        # Team-split pooling needs team_ids → build the loader in team mode.
+        return {"full_image": False, "crop": True,
+                "n_frames": cfg.get("n_frames", 9), "with_teams": True}
 
     raise ValueError(
         f"Dataset config not defined for baseline: '{baseline_name}'. "
-        "Supported: baseline1, baseline3, baseline4, baseline5, baseline6."
+        "Supported: baseline1, baseline3, baseline4, baseline5, baseline6, "
+        "baseline7, baseline8."
     )
 
 
@@ -410,6 +513,20 @@ def _batch_unpack_for(baseline_name: str) -> BatchUnpack:
         # Same 4-tuple crop contract as baseline5, but baseline6's forward
         # takes (crops, masks) with per-frame pooling done inside the model.
         from models.baseline6 import temporal_crop_unpack
+
+        return temporal_crop_unpack
+
+    if baseline_name == "baseline7":
+        # Same (crops, masks) → group_labels contract as baseline6; player
+        # LSTM 1, per-frame pooling, and scene LSTM 2 all live in the model.
+        from models.baseline7 import temporal_crop_unpack
+
+        return temporal_crop_unpack
+
+    if baseline_name == "baseline8":
+        # Team-split: forwards (crops, masks, team_ids); the 5-tuple team-mode
+        # batch is required (temporal_crop_unpack here aliases group_team).
+        from models.baseline8 import temporal_crop_unpack
 
         return temporal_crop_unpack
 

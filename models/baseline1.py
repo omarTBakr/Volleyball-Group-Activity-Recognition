@@ -22,33 +22,23 @@ from __future__ import annotations
 import os
 os.environ["MPLBACKEND"] = "Agg"
 
-import json
-from datetime import datetime
-
 import hydra
 import torch
 from omegaconf import DictConfig
 from torch import nn, optim
 from torch.utils.data import DataLoader
-from torch.utils.tensorboard import SummaryWriter
 from torchvision import models
 
 from configs.labels import (
     GROUP_ACTIVITY_TO_IDX,
-    IDX_TO_GROUP_ACTIVITY,
     NUM_GROUP_ACTIVITIES,
 )
-from configs.path_config import LOGS_DIR
 from src.data.kaggle_data_loader import VolleyballDataset, collate_fn
-from utils.load_model_config import build_model, build_scheduler, build_transforms
+from utils.load_model_config import build_scheduler, build_transforms
+from utils.trainer import Trainer
 from utils.utility import (
     get_device,
     load_model,
-    log_experiment_summary,
-    save_model,
-    test_one_epoch,
-    train_one_epoch,
-    validate_one_epoch,
 )
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -99,17 +89,12 @@ def train_test(cfg: DictConfig) -> None:
     device = get_device(cfg.device)
 
     # ── Logging Setup ────────────────────────────────────────────────────
-    run_log_dir = LOGS_DIR / "baseline1"
-    run_log_dir.mkdir(parents=True, exist_ok=True)
-    run_count = len(list(run_log_dir.glob("*.json"))) + 1
-    run_id = f"run{run_count}"
-
-    writer = SummaryWriter(log_dir=run_log_dir / "tensorboard" / run_id)
-    metrics_history = []
+    run_id = Trainer.next_run_id("baseline1")
+    trainer = Trainer("baseline1", run_id, device=device)
+    ckpt_name = f"baseline1_{run_id}.pt"
 
     # Class metadata comes from the labels module, not from the YAML.
     num_classes = NUM_GROUP_ACTIVITIES
-    class_names = list(GROUP_ACTIVITY_TO_IDX.keys())
 
  
     # ── Data ─────────────────────────────────────────────────────────────
@@ -146,19 +131,11 @@ def train_test(cfg: DictConfig) -> None:
     ).to(device)
     criterion = nn.CrossEntropyLoss(label_smoothing=cfg.get("label_smoothing", 0.0))
 
-    best_f1 = 0.0
-    patience = cfg.get("early_stopping_patience", 0)
-    epochs_without_improvement = 0
-    global_epoch = 0
-
     # ═════════════════════════════════════════════════════════════════════
     # Stage 1: Linear probe — freeze backbone, train head only
     # ═════════════════════════════════════════════════════════════════════
     warmup_epochs = cfg.get("warmup_epochs", 5)
     warmup_lr = cfg.get("warmup_lr", 1e-3)
-    print(f"\n{'='*60}")
-    print(f"  STAGE 1: Linear Probe ({warmup_epochs} epochs, lr={warmup_lr})")
-    print(f"{'='*60}")
 
     # Freeze entire backbone
     for param in model.backbone.parameters():
@@ -182,68 +159,42 @@ def train_test(cfg: DictConfig) -> None:
 
     model.train = _train_with_frozen_bn
 
-    optimizer_s1 = optim.SGD(
+    # optimizer_s1 = optim.SGD(
+    #     model.backbone.fc.parameters(),
+    #     lr=warmup_lr,
+    #     momentum=0.9,
+    #     nesterov=True,
+    #     weight_decay=cfg.get("weight_decay", 5e-4),
+    # )
+    # AdamW equivalent — no momentum/nesterov (betas default (0.9, 0.999)); use
+    # an AdamW-scale warmup_lr from the config (1e-3 head probe).
+    optimizer_s1 = optim.AdamW(
         model.backbone.fc.parameters(),
         lr=warmup_lr,
-        momentum=0.9,
-        nesterov=True,
         weight_decay=cfg.get("weight_decay", 5e-4),
     )
 
-
-
-    for epoch in range(warmup_epochs):
-        global_epoch += 1
-        print(f"\n--- Stage 1 · Epoch {epoch + 1}/{warmup_epochs} ---")
-
-        train_loss, train_acc, train_f1, _ = train_one_epoch(
-            model, train_loader, criterion, optimizer_s1, device,
-        )
-        val_loss, val_acc, val_f1, _ = validate_one_epoch(
-            model, val_loader, criterion, device,
-        )
-
-        writer.add_scalar("Loss/train", train_loss, global_epoch)
-        writer.add_scalar("Loss/val", val_loss, global_epoch)
-        writer.add_scalar("F1_Score/train", train_f1, global_epoch)
-        writer.add_scalar("F1_Score/val", val_f1, global_epoch)
-
-        print(f"Train -> Loss: {train_loss:.4f}, Acc: {train_acc:.4f}, F1: {train_f1:.4f}")
-        print(f"Val   -> Loss: {val_loss:.4f}, Acc: {val_acc:.4f}, F1: {val_f1:.4f}")
-
-        epoch_metrics = {
-            "epoch": global_epoch,
-            "stage": 1,
-            "train_loss": train_loss,
-            "train_acc": train_acc,
-            "train_f1": train_f1,
-            "val_loss": val_loss,
-            "val_acc": val_acc,
-            "val_f1": val_f1,
-            "learning_rate": warmup_lr,
-        }
-        metrics_history.append(epoch_metrics)
-
-        log_path = run_log_dir / f"{run_id}.json"
-        with log_path.open("w") as f:
-            json.dump({"epochs": metrics_history}, f, indent=4)
-
-        if val_f1 > best_f1:
-            best_f1 = val_f1
-            save_model(f"baseline1_{run_id}.pt", global_epoch, model, optimizer_s1, val_loss)
-            print(f"  ✓ New best model saved (F1: {best_f1:.4f})")
+    # Probe: no scheduler and no early stopping (runs all warmup epochs),
+    # matching the original Stage-1 behavior.
+    trainer.run_stage(
+        model=model,
+        train_loader=train_loader,
+        val_loader=val_loader,
+        criterion=criterion,
+        optimizer=optimizer_s1,
+        num_classes=num_classes,
+        num_epochs=warmup_epochs,
+        checkpoint_name=ckpt_name,
+        class_to_idx=GROUP_ACTIVITY_TO_IDX,
+        stage="probe",
+        desc="B1-probe",
+    )
 
     # ═════════════════════════════════════════════════════════════════════
     # Stage 2: Full fine-tune — unfreeze backbone, differential LR
     # ═════════════════════════════════════════════════════════════════════
     finetune_epochs = cfg.num_epochs
     head_mult = cfg.get("head_lr_multiplier", 3)
-    print(f"\n{'='*60}")
-    print(f"  STAGE 2: Full Fine-tune ({finetune_epochs} epochs)")
-    print(f"  Backbone lr={cfg.learning_rate}, Head lr={cfg.learning_rate * head_mult}")
-    print(f"{'='*60}")
-
-
 
     # Partial unfreeze: keep conv1/bn1/layer1/layer2 frozen (generic low-level
     # features), only train layer3, layer4, and the head. Restricts the surface
@@ -263,102 +214,59 @@ def train_test(cfg: DictConfig) -> None:
     ]
     head_params = list(model.backbone.fc.parameters())
 
-    optimizer_s2 = optim.SGD(
+    # optimizer_s2 = optim.SGD(
+    #     [
+    #         {"params": backbone_params, "lr": cfg.learning_rate},
+    #         {"params": head_params, "lr": cfg.learning_rate * head_mult},
+    #     ],
+    #     momentum=0.9,
+    #     nesterov=True,
+    #     weight_decay=cfg.get("weight_decay", 5e-4),
+    # )
+    # AdamW equivalent — differential LR groups preserved; AdamW-scale backbone
+    # lr from the config (1e-4 fine-tune), head at ×head_mult.
+    optimizer_s2 = optim.AdamW(
         [
             {"params": backbone_params, "lr": cfg.learning_rate},
             {"params": head_params, "lr": cfg.learning_rate * head_mult},
         ],
-        momentum=0.9,
-        nesterov=True,
         weight_decay=cfg.get("weight_decay", 5e-4),
     )
     scheduler = build_scheduler(optimizer_s2, cfg)
 
-    epochs_without_improvement = 0  # reset for stage 2
-
-    for epoch in range(finetune_epochs):
-        global_epoch += 1
-        print(f"\n--- Stage 2 · Epoch {epoch + 1}/{finetune_epochs} ---")
-
-        train_loss, train_acc, train_f1, _ = train_one_epoch(
-            model, train_loader, criterion, optimizer_s2, device,
-        )
-        val_loss, val_acc, val_f1, _ = validate_one_epoch(
-            model, val_loader, criterion, device,
-        )
-
-        if scheduler:
-            scheduler.step()
-            writer.add_scalar("Learning_Rate", scheduler.get_last_lr()[0], global_epoch)
-
-        writer.add_scalar("Loss/train", train_loss, global_epoch)
-        writer.add_scalar("Loss/val", val_loss, global_epoch)
-        writer.add_scalar("F1_Score/train", train_f1, global_epoch)
-        writer.add_scalar("F1_Score/val", val_f1, global_epoch)
-
-        print(f"Train -> Loss: {train_loss:.4f}, Acc: {train_acc:.4f}, F1: {train_f1:.4f}")
-        print(f"Val   -> Loss: {val_loss:.4f}, Acc: {val_acc:.4f}, F1: {val_f1:.4f}")
-
-        # ── JSON Logging ─────────────────────────────────────────────────
-        epoch_metrics = {
-            "epoch": global_epoch,
-            "stage": 2,
-            "train_loss": train_loss,
-            "train_acc": train_acc,
-            "train_f1": train_f1,
-            "val_loss": val_loss,
-            "val_acc": val_acc,
-            "val_f1": val_f1,
-        }
-        if scheduler:
-            epoch_metrics["learning_rate"] = scheduler.get_last_lr()[0]
-        metrics_history.append(epoch_metrics)
-
-        log_path = run_log_dir / f"{run_id}.json"
-        with log_path.open("w") as f:
-            json.dump({"epochs": metrics_history}, f, indent=4)
-
-        if val_f1 > best_f1:
-            best_f1 = val_f1
-            epochs_without_improvement = 0
-            save_model(f"baseline1_{run_id}.pt", global_epoch, model, optimizer_s2, val_loss)
-            print(f"  ✓ New best model saved (F1: {best_f1:.4f})")
-        else:
-            epochs_without_improvement += 1
-            if patience > 0 and epochs_without_improvement >= patience:
-                print(f"  ⏹ Early stopping — no improvement for {patience} epochs.")
-                break
+    # Fine-tune shares the checkpoint (and thus the best-F1) with the probe:
+    # it only overwrites when it beats the probe's best.
+    best_f1 = trainer.run_stage(
+        model=model,
+        train_loader=train_loader,
+        val_loader=val_loader,
+        criterion=criterion,
+        optimizer=optimizer_s2,
+        scheduler=scheduler,
+        num_classes=num_classes,
+        num_epochs=finetune_epochs,
+        checkpoint_name=ckpt_name,
+        class_to_idx=GROUP_ACTIVITY_TO_IDX,
+        patience=cfg.get("early_stopping_patience", 0),
+        stage="finetune",
+        desc="B1-finetune",
+    )
 
     # ── Test Best Model ──────────────────────────────────────────────────
-    print("\n--- Testing Best Model ---")
     best_model = Model(
         num_classes=num_classes,
         backbone_name=cfg.model.name,
         dropout=cfg.model.get("dropout", 0.0),
     )
-    best_model, _, _, _, _ = load_model(f"baseline1_{run_id}.pt", best_model)
+    best_model, _, _, _, _ = load_model(ckpt_name, best_model)
     best_model.to(device)
 
-    test_loss, test_acc, test_f1, _ = test_one_epoch(
-        best_model, test_loader, criterion, device,
-    )
-    print(f"Final Test -> Loss: {test_loss:.4f}, Acc: {test_acc:.4f}, F1: {test_f1:.4f}")
-
-    # Log test results to JSON
-    with (run_log_dir / f"{run_id}.json").open("r+") as f:
-        data = json.load(f)
-        data["test"] = {
-            "test_loss": test_loss,
-            "test_acc": test_acc,
-            "test_f1": test_f1,
-        }
-        f.seek(0)
-        json.dump(data, f, indent=4)
-        f.truncate()
-
-    log_experiment_summary(
-        writer=writer,
-        run_id=run_id,
+    trainer.run_test(
+        model=best_model,
+        test_loader=test_loader,
+        criterion=criterion,
+        num_classes=num_classes,
+        best_val_f1=best_f1,
         hparam_dict={
             "baseline":                "baseline1",
             "batch_size":              cfg.batch_size,
@@ -374,13 +282,9 @@ def train_test(cfg: DictConfig) -> None:
             "backbone":                cfg.model.name,
             "dropout":                 float(cfg.model.get("dropout", 0.0)),
         },
-        test_f1=test_f1,
-        test_acc=test_acc,
-        test_loss=test_loss,
-        best_val_f1=best_f1,
     )
 
-    writer.close()
+    trainer.close()
 
 
 if __name__ == "__main__":

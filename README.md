@@ -97,6 +97,7 @@ uv run python -m utils.evaluate --model baseline3_stage_b_run2.pt   --baseline b
 uv run python -m utils.evaluate --model baseline4_run2.pt           --baseline baseline4
 uv run python -m utils.evaluate --model baseline5_stage_b_run4.pt   --baseline baseline5 --batch-size 4
 uv run python -m utils.evaluate --model baseline6_stage_b_run2.pt   --baseline baseline6 --batch-size 4
+uv run python -m utils.evaluate --model baseline7_stage_b_run1.pt   --baseline baseline7 --batch-size 4
 ```
 
 Produces confusion matrix, classification report, precision–recall curves, and mAP under `plots/<baseline>/`. `--device cpu` forces CPU; `--batch-size` overrides the config's batch (B5/B6 clips are 9×~12 crops each, so batch 4 is the 8 GB-GPU sweet spot). The evaluator **auto-detects saved architecture details** (pool mode, LSTM shape, head width, frame count) from the checkpoint's tensor shapes, so legacy checkpoints and post-training YAML edits both load without changes.

@@ -191,6 +191,7 @@ class VolleyballDataset(BaseVolleyballDataset):
         crop: bool = False,
         transform: Callable | None = None,
         dataset_dir: Path | str | None = None,
+        with_teams: bool = False,
     ) -> None:
         self.dataset_dir = Path(dataset_dir) if dataset_dir else MAIN_DATASET_DIR
         if not self.dataset_dir.is_dir():
@@ -199,7 +200,7 @@ class VolleyballDataset(BaseVolleyballDataset):
             )
         super().__init__(
             mode=mode, n_frames=n_frames, full_image=full_image,
-            crop=crop, transform=transform,
+            crop=crop, transform=transform, with_teams=with_teams,
         )
 
     def _load_master_data(self) -> dict:
