@@ -79,7 +79,7 @@ Table~\ref{tab:baselines} lists the planned progression of models, each adding t
 
 \begin{table}[h]
     \centering
-    \caption{Baseline models. B1, B3, B4, B5, and B6 are complete; B7--B8 pending.}
+    \caption{Baseline models. B1--B6 complete with results; B7--B8 implemented (B7 has one result from a superseded config, B8 untrained).}
     \label{tab:baselines}
     \begin{tabular}{lccc}
         \toprule
@@ -90,8 +90,8 @@ Table~\ref{tab:baselines} lists the planned progression of models, each adding t
         B4 & LSTM & --- & LSTM \\
         B5 & LSTM/player & Concat-pool & MLP \\
         B6 & LSTM/image & Max-pool/frame & LSTM + skip Conv1d \\
-        B7 & LSTM$_1$ + LSTM$_2$ & Max-pool & LSTM$_2$ \\
-        B8 & LSTM$_1$ + LSTM$_2$ & Team-split & LSTM$_2$ \\
+        B7 & LSTM$_1$ + LSTM$_2$ & Pool/frame & LSTM$_2$ + skips \\
+        B8 & LSTM$_1$ + LSTM$_2$ & Team-split & LSTM$_2$ + skips \\
         \bottomrule
     \end{tabular}
 \end{table}
@@ -238,9 +238,36 @@ Per class (Fig.~\ref{fig:b6-confusion}), B6 is strongest on the acting-player ac
     \label{fig:b6-confusion}
 \end{figure}
 
+\section{Baseline 7: Full Hierarchical Model}
+
+B7 is the paper's two-stage hierarchical model with skip connections at both levels. A player-level \textbf{LSTM$_1$} runs over each player's 9-frame track; players are pooled per frame into a scene sequence that a scene-level \textbf{LSTM$_2$} consumes. Two skips are added on top of the paper: (1) \emph{player-level, feature-axis} --- each timestep's per-player vector is $[\text{LSTM}_1\text{ output} \,\|\, \text{Linear-projected backbone features}]$ (the paper's fc7 $\|$ hidden trick), keeping appearance beside the temporal summary while the time axis survives for LSTM$_2$; (2) \emph{scene-level, time-axis} --- B6's recipe of concatenating LSTM$_2$'s hidden states with a projection of the pooled scene sequence along time, then a global-kernel Conv1d fusion. Stage A pretrains LSTM$_1$ + projection on the 9 person actions (P$=$1 tracks); Stage B is two-phase (probe with the player model frozen, then joint fine-tune unfreezing LSTM$_1$), selecting on validation accuracy. Optimizer is AdamW.
+
+\begin{table}[h]
+    \centering
+    \caption{Baseline 7 test-set metrics --- \emph{superseded config} (see text).}
+    \label{tab:b7-metrics}
+    \begin{tabular}{lc}
+        \toprule
+        \textbf{Metric} & \textbf{Value} \\
+        \midrule
+        Accuracy   & 65.81\% \\
+        Macro F1   & 0.637 \\
+        Test Loss  & 1.21 \\
+        \bottomrule
+    \end{tabular}
+\end{table}
+
+These numbers are from an \textbf{initial single-phase run with the player model frozen} --- they land \emph{below} B6 (70.5\%) and even B5, the same ``frozen pretrained temporal weights cap performance'' lesson B6's run~1 taught. The code has since moved to the two-phase probe~$\to$~joint fine-tune scheme (unfreezing LSTM$_1$) plus AdamW, which is the run that will show whether the hierarchy pays off; it has not been re-run. B7 still pools all players side-blind, so its confusion matrix keeps the left/right leakage --- unaddressed until B8.
+
+\section{Baseline 8: Team-Split Pooling}
+
+B8 makes a single architectural change to B7 --- the paper's group-style pooling. Instead of pooling all ${\sim}12$ players into one scene vector (side-blind), each team's players are pooled \emph{separately} and the two team vectors are concatenated, so the scene vector keeps \emph{which side did what} --- the signal every earlier baseline erases, and the direct fix for the dominant left/right confusion (winpoint, pass, set). Both of B7's skips are kept unchanged; only the scene vector doubles in width (LSTM$_2$ input becomes $4H_1$ for max/mean or $8H_1$ for concat). Team membership comes from the data loader in team mode (\texttt{with\_teams=True}), which emits a per-player \texttt{team\_ids} tensor (0/1 by court side, $-1$ for padding) derived once per clip from box center-$x$ ordering --- the paper's split, applied as a fixed per-track label so it coexists with the track-ID ordering the LSTMs require. Uneven or empty teams are handled by masking (a missing team pools to a zero vector).
+
+B8 is implemented and shape-verified (forward/backward for both pool modes, checkpoint round-trip, the zero-player-team edge case, and Stage~A ignoring \texttt{team\_ids} all pass a synthetic test) but \textbf{not yet trained}. It is the ablation rung that isolates team structure: in the extension paper, team-split pooling is worth \textbf{$+11.6$ points ($70.3 \to 81.9$)} over all-player pooling, and it targets exactly the left/right errors the confusion matrices have shown since B5. One caveat: quality hinges on the loader's $x$-coordinate team assignment, which can mislabel players near mid-court --- if B8 does not beat B7, inspect the split before the pooling.
+
 \section{Next Steps}
 
-(i) Reduce overfitting across all baselines --- stronger augmentation, higher dropout, and earlier stopping remain the levers (B6's fine-tune still reaches ${\sim}93\%$ train F1 against ${\sim}64\%$ validation); (ii) proceed to the remaining hierarchical baselines B7--B8 --- above all B8, whose team-split pooling is the direct fix for the left/right winpoint collapse diagnosed in B5; the tracking boxes' $x$-coordinates already provide the team split.
+(i) \textbf{Re-run B7} under the two-phase (probe $\to$ joint fine-tune) + AdamW config that superseded its frozen single-phase result --- unfreezing LSTM$_1$ is what closed B6's probe/fine-tune gap, and B7 has more pretrained capacity to unlock. (ii) \textbf{Train and evaluate B8} --- its team-split pooling is the direct fix for the left/right winpoint/pass/set collapse diagnosed since B5, and the paper's largest single ablation gain. (iii) Reduce overfitting across all baselines --- stronger augmentation, higher dropout, and earlier stopping remain the levers (B6's fine-tune still reaches ${\sim}93\%$ train F1 against ${\sim}64\%$ validation).
 
 %----------------------------------------------------------
 

@@ -4,16 +4,16 @@ A deep learning pipeline for **group activity recognition** in volleyball videos
 
 ![Sample clip](plots/videoAnnot.png)
 
-The snapshot shows the output of `python -m src.data.visualize_data` with `video_fully_annotated=True`.
+The snapshot shows the output of `uv run python -m src.data.visualize_data` with `video_fully_annotated=True`.
 
 ---
 
 ## At a Glance
 
 - **Dataset**: 55 volleyball videos, 4,830 clips, two annotation levels — 8 group activities (scene-level) and 9 person actions (player-level).
-- **Baselines**: 8 progressively complex models (B1–B8) sharing a single data loader. **B1, B3, B4, B5, and B6 are complete; B7 and B8 are pending.**
-- **Stack**: PyTorch + Hydra config + TensorBoard logging; multi-GPU via `nn.DataParallel`; Kaggle dual-T4 ready.
-- **Paper**: Ibrahim et al., *A Hierarchical Deep Temporal Model for Group Activity Recognition*, CVPR 2016.
+- **Baselines**: 8 progressively complex models (B1–B8) sharing one data loader, training driver, and evaluator. **B1, B3, B4, B5, B6 are complete with results; B7 and B8 are implemented and shape-verified — B7 has one result from a superseded config, B8 is untrained.**
+- **Stack**: PyTorch + Hydra config + TensorBoard logging; **AdamW** optimizer; shared `Trainer` (one stage per call) and central batch unpackers; multi-GPU via `nn.DataParallel`; Kaggle dual-T4 ready.
+- **Paper**: Ibrahim et al., *A Hierarchical Deep Temporal Model for Group Activity Recognition*, CVPR 2016 (+ journal extension, arXiv:1607.02643).
 
 ### Results Summary
 
@@ -24,10 +24,10 @@ The snapshot shows the output of `python -m src.data.visualize_data` with `video
 | B4 | 9 frames → frozen B1 backbone → LSTM | 66.12% | 0.673 | 1.05 |
 | B5 | Per-player LSTM → pool summaries → MLP | 66.34% | 0.619 | **0.97** |
 | **B6** | **Pool players per frame → scene LSTM + skip Conv1d** | **70.53%** | **0.686** | 1.04 |
-| B7 | Hierarchical: player LSTM₁ → pool per frame → scene LSTM₂ | *pending* | | |
-| B8 | B7 + team-split pooling (6+6, concat) | *pending* | | |
+| B7 | Hierarchical: player LSTM₁ → pool per frame → scene LSTM₂ (+ skips) | 65.81%† | 0.637† | 1.21† |
+| B8 | B7 + team-split pooling (per-team, concat) | *untrained* | | |
 
-Per-baseline architecture, hyperparameters, and analysis: [Baselines & Results](#baselines--results).
+† B7's number is from an **initial single-phase run with the player model frozen** — since superseded by a two-phase (probe → joint fine-tune) + AdamW config that hasn't been re-run yet. Expect it to change. B8 is implemented and shape-verified but not yet trained. Per-baseline architecture, hyperparameters, and analysis: [Baselines & Results](#baselines--results).
 
 ---
 
@@ -47,21 +47,25 @@ Per-baseline architecture, hyperparameters, and analysis: [Baselines & Results](
 
 ### 1. Install Dependencies
 
+The project uses [`uv`](https://docs.astral.sh/uv/). Sync the environment from the lockfile:
+
 ```bash
-pip install -r requirements.txt
+uv sync
 ```
+
+`uv run` (used throughout below) executes inside that environment automatically.
 
 ### 2. Prepare the Dataset (one-time)
 
 ```bash
 # Step 1: build master JSON from detections + tracking and enrich with scene labels
-python -m src.json_parser
+uv run python -m src.json_parser
 
 # Step 2: dump annotations to a pickle cache for fast metadata loading
-python -m src.pickle_dump
+uv run python -m src.pickle_dump
 
 # Step 3: pack raw .jpg frames into a memory-mapped LMDB database
-python -m src.load_frames_into_lmdb
+uv run python -m src.load_frames_into_lmdb
 ```
 
 All three scripts are singletons — they skip work if the output already exists.
@@ -69,8 +73,8 @@ All three scripts are singletons — they skip work if the output already exists
 ### 3. Verify the Loader
 
 ```bash
-python -m src.data.data_loader          # LMDB backend (local)
-python -m src.data.kaggle_data_loader   # disk backend (Kaggle / no LMDB)
+uv run python -m src.data.data_loader          # LMDB backend (local)
+uv run python -m src.data.kaggle_data_loader   # disk backend (Kaggle / no LMDB)
 ```
 
 Smoke-tests the dataset by pulling a few batches in full-image and crop mode. After (re)building the JSON/pickle, also verify that each clip's `scene_class` matches its own video's `annotations.txt` before training.
@@ -78,16 +82,16 @@ Smoke-tests the dataset by pulling a few batches in full-image and crop mode. Af
 ### 4. Train a Baseline
 
 ```bash
-python -m models.baseline1   # B1: Two-stage fine-tuned ResNet-50
-python -m models.baseline3   # B3: Person-then-group crop classifier
-python -m models.baseline4   # B4: Frozen B1 backbone → LSTM (needs baseline1_run2.pt)
-python -m models.baseline5   # B5: Per-player LSTM → pooled group head (needs baseline3_stage_a_run2.pt)
-python -m models.baseline6   # B6: Pooled-scene LSTM + skip Conv1d (needs baseline3_stage_a_run2.pt)
+uv run python -m models.baseline1   # B1: Two-stage fine-tuned ResNet-50
+uv run python -m models.baseline3   # B3: Person-then-group crop classifier
+uv run python -m models.baseline4   # B4: Frozen B1 backbone → LSTM (needs baseline1_run2.pt)
+uv run python -m models.baseline5   # B5: Per-player LSTM → pooled group head (needs baseline3_stage_a_run2.pt)
+uv run python -m models.baseline6   # B6: Pooled-scene LSTM + skip Conv1d (needs baseline3_stage_a_run2.pt)
+uv run python -m models.baseline7   # B7: Hierarchical LSTM₁→pool→LSTM₂ + skips (needs baseline3_stage_a_run2.pt)
+uv run python -m models.baseline8   # B8: B7 + team-split pooling (needs baseline3_stage_a_run2.pt)
 ```
 
-(With `uv`, prefix commands with `uv run`, e.g. `uv run python -m models.baseline1`.)
-
-Hyperparameters live in `configs/baseline{1,3,4,5,6}.yaml` (Hydra). Per-epoch metrics are written to `logs/<baseline>/runN.json` and a TensorBoard event file under `logs/<baseline>/tensorboard/runN/`.
+Hyperparameters live in `configs/baseline{1,3,4,5,6,7,8}.yaml` (Hydra). All baselines share `utils/trainer.py` (a `Trainer` that runs one stage per `run_stage` call — staged baselines call it 2–3 times) and the central batch unpackers in `src/data/unpackers.py`; optimizers are **AdamW**. Per-epoch metrics are written to `logs/<baseline>/runN.json` and a TensorBoard event file under `logs/<baseline>/tensorboard/runN/`.
 
 ### 5. Evaluate a Trained Checkpoint
 
@@ -98,6 +102,7 @@ uv run python -m utils.evaluate --model baseline4_run2.pt           --baseline b
 uv run python -m utils.evaluate --model baseline5_stage_b_run4.pt   --baseline baseline5 --batch-size 4
 uv run python -m utils.evaluate --model baseline6_stage_b_run2.pt   --baseline baseline6 --batch-size 4
 uv run python -m utils.evaluate --model baseline7_stage_b_run1.pt   --baseline baseline7 --batch-size 4
+uv run python -m utils.evaluate --model baseline8_stage_b_run1.pt   --baseline baseline8 --batch-size 4   # once trained
 ```
 
 Produces confusion matrix, classification report, precision–recall curves, and mAP under `plots/<baseline>/`. `--device cpu` forces CPU; `--batch-size` overrides the config's batch (B5/B6 clips are 9×~12 crops each, so batch 4 is the 8 GB-GPU sweet spot). The evaluator **auto-detects saved architecture details** (pool mode, LSTM shape, head width, frame count) from the checkpoint's tensor shapes, so legacy checkpoints and post-training YAML edits both load without changes.
@@ -115,10 +120,10 @@ The ladder is a designed ablation — each rung isolates one component (person c
 | **B4** | ✅ Done | 9 frames (full) | LSTM on frame features | ✗ | LSTM → 8 classes |
 | **B5** | ✅ Done | 9 frames (crops) | LSTM per player | Max+mean concat pool over players | MLP (8 classes) |
 | **B6** | ✅ Done | 9 frames (crops) | LSTM on pooled frames + skip Conv1d fusion | Max-pool per frame (frozen B3 features) | Conv1d summary → MLP (8 classes) |
-| **B7** | 🔲 Pending | 9 frames (crops) | LSTM₁ per player + LSTM₂ | Max-pool per frame | LSTM₂ → 8 classes |
-| **B8** | 🔲 Pending | 9 frames (crops) | LSTM₁ per player + LSTM₂ | Team-split pool (6+6) | Concat teams → LSTM₂ |
+| **B7** | ⚙️ Implemented | 9 frames (crops) | LSTM₁ per player (+ feature-axis skip) + LSTM₂ (+ time-axis skip/Conv1d) | Pool per frame | LSTM₂ → 8 classes |
+| **B8** | ⚙️ Implemented | 9 frames (crops) | Same as B7 | **Team-split** pool per frame (per-team, concat) | LSTM₂ → 8 classes |
 
-Each completed baseline below follows the same template: **architecture → test metrics → analysis**, with hyperparameters and evaluation plots collapsed.
+⚙️ = model implemented and shape-verified; B7 has an initial result, B8 is untrained. Each completed baseline below follows the same template: **architecture → test metrics → analysis**, with hyperparameters and evaluation plots collapsed.
 
 ### Baseline 1 — Single-Frame Image Classifier
 
@@ -351,6 +356,76 @@ Per-class, B6 is strong on the acting-player activities — spike F1 hits **0.86
 
 </details>
 
+### Baseline 7 — Full Hierarchical Model (Player LSTM₁ → Pool per Frame → Scene LSTM₂, with skips)
+
+B7 is the paper's two-stage hierarchical model: a **player-level LSTM₁** runs over each player's 9-frame track, players are pooled per frame into a scene sequence, and a **scene-level LSTM₂** models the clip. On top of the paper it keeps two skip connections: (1) **player-level, feature-axis** — each timestep's per-player vector is `[LSTM₁ output ‖ Linear-projected backbone features]` (the paper's fc7‖hidden trick), so appearance rides alongside the temporal summary while the time axis survives for LSTM₂; (2) **scene-level, time-axis** — B6's recipe of concatenating LSTM₂'s hidden states with a projection of the pooled scene features along time, then a global-kernel Conv1d fusion into the clip summary.
+
+**Stage A** pretrains LSTM₁ + projection on the 9 person actions (P=1 tracks). **Stage B** is two-phase (mirroring B6): a probe with the player model frozen, then a joint fine-tune that unfreezes LSTM₁ + projection at a lower LR. Both stages select the best checkpoint on validation **accuracy**.
+
+<details>
+<summary><b>Hyperparameters</b> (<code>configs/baseline7.yaml</code>)</summary>
+
+| Hyperparameter | Value |
+|---|---|
+| Feature extractor | ResNet-50, frozen, loaded from `baseline3_stage_a_run2.pt` |
+| Player LSTM₁ | hidden 512, 1 layer; per-player repr = LSTM ‖ proj = **1024** |
+| Scene LSTM₂ | hidden 512; input = pooled scene seq (2048 for concat pool) |
+| Scene fusion | `Conv1d(512→256, k=18) → BN → ReLU → Conv1d(256→128, k=1) → BN` → 128-dim summary |
+| MLP head | `Linear(128, 512) → LN → ReLU → Drop(0.2) → Linear(512, 256) → LN → ReLU → Drop(0.2) → Linear(256, 8)` |
+| Optimizer | **AdamW** (Stage A 1e-3; Stage-B probe 1e-3; fine-tune player 1e-4 / scene 1e-3) |
+| Stage B | 10-epoch probe → 50-epoch joint fine-tune, CosineAnnealingLR |
+| Batch | effective 8 = micro 4 × 2 gradient-accumulation steps |
+
+</details>
+
+#### Test Metrics (run 1 — *superseded config*)
+
+| Metric | Value |
+|--------|-------|
+| Accuracy | 65.81% |
+| Macro F1 | 0.637 |
+| Loss | 1.21 |
+
+**Status.** This number comes from an **early single-phase run with the player model frozen** — it lands *below* B6 (70.5%) and even B5, exactly the "frozen pretrained temporal weights cap performance" lesson B6's run 1 taught. The code has since moved to the **two-phase probe → joint fine-tune** scheme (unfreezing LSTM₁) plus AdamW, which is the run that will tell whether the hierarchy actually pays off; it hasn't been re-run yet. Per-class, the run-1 confusion matrix shows the familiar left/right leakage — unaddressed here because B7 still pools all players side-blind.
+
+<details>
+<summary><b>Evaluation plots</b> (run 1)</summary>
+
+| Confusion Matrix | Classification Report |
+|:---:|:---:|
+| ![Confusion Matrix](plots/baseline7/Confusion%20Matrix.png) | ![Classification Report](plots/baseline7/Classification%20Report.png) |
+| **Precision-Recall Curves** | **mAP & F1 per Class** |
+| ![Precision-Recall Curves](plots/baseline7/Precision-Recall%20Curves.png) | ![mAP & F1](plots/baseline7/mAP%20%26%20F1%20Score%20per%20Class.png) |
+
+</details>
+
+### Baseline 8 — Team-Split Pooling (B7 + group-style pooling)
+
+B8 is B7 with **one architectural change**: instead of pooling all ~12 players into a single scene vector (side-blind), each team's players are pooled **separately** and the two team vectors are concatenated. This preserves *which side did what* — the signal every earlier baseline erases, and the direct fix for the dominant left/right confusion (winpoint, pass, set). Both of B7's skip connections are kept unchanged; only the scene vector doubles in width (LSTM₂ input becomes 4·H1 for max/mean or 8·H1 for concat).
+
+Team membership comes from the data loader in **team mode** (`with_teams=True`): the collate emits a per-player `team_ids` tensor (0 = left court side, 1 = right, −1 for padding), derived once per clip from box center-x ordering — the paper's method, applied as a fixed per-track label so it coexists with the track-consistency the LSTMs require. Uneven or zero-player teams are handled by masking (a missing team pools to a zero vector, no NaN).
+
+<details>
+<summary><b>Hyperparameters</b> (<code>configs/baseline8.yaml</code>)</summary>
+
+Identical to B7, except the per-frame pooling is **per-team** and the scene vector doubles:
+
+| Hyperparameter | Value |
+|---|---|
+| Everything | as B7 (`configs/baseline8.yaml`) |
+| Loader | `with_teams=True` → emits `team_ids` per player |
+| Per-team pool | max / mean / **concat** → team_width = 2·H1 or 4·H1 |
+| Scene vector | concat of the two teams → LSTM₂ input = 4·H1 (max/mean) or **8·H1** (concat) |
+
+</details>
+
+#### Test Metrics
+
+*Untrained.* B8 is implemented and shape-verified (forward/backward for both pool modes, checkpoint round-trip, the zero-player-team edge case, and Stage A ignoring team_ids all pass a synthetic test), but has not been trained yet. Train with `uv run python -m models.baseline8`; it needs `baseline3_stage_a_run2.pt` and the team-mode loader. **Expectation:** this is the ablation rung that isolates team structure — in the paper, team-split pooling is worth **+11.6 points (70.3 → 81.9)** over all-player pooling, and it targets precisely the left/right errors the confusion matrices have shown since B5.
+
+> [!note]
+> B8's result quality hinges on the loader's team assignment (x-coordinate ordering), which can mislabel players near mid-court. If B8 doesn't beat B7, inspect the team split before the pooling.
+
 ---
 
 ## Dataset
@@ -550,12 +625,25 @@ graph TD
 
 ```python
 loader = DataLoader(dataset, batch_size=8, collate_fn=collate_fn)
-# Crop mode returns: (crops_batch, person_labels_batch, group_labels_batch, masks_batch)
+# Crop mode returns:               (crops, person_labels, group_labels, masks)
+# Crop mode with with_teams=True:  (crops, person_labels, group_labels, masks, team_ids)
 ```
 
-### Per-Baseline Batch Unpackers
+**Team mode** (`VolleyballDataset(..., with_teams=True)`) is opt-in and fully backward-compatible: the first four elements are unchanged, and a 5th `team_ids` tensor `(B, P)` is appended — `0` = left court side, `1` = right, `-1` for padded slots, aligned with the mask. Team membership is derived once per clip from box center-x ordering (the paper's split), so it coexists with the track-ID player ordering the temporal LSTMs require. B8 is the only consumer.
 
-Each baseline that uses crop mode pairs the loader with a tiny `batch_unpack` callable that surfaces the right `(model_inputs, target)` from the 4-tuple. These slot into the shared training/eval driver in `utils.utility` (see `train_one_epoch`'s `batch_unpack` kwarg) and into `utils.evaluate`. Adding a new baseline = one model class + one unpacker; no changes to the loader or the training loop.
+### Batch Unpackers
+
+An *unpacker* turns a collated batch into `(model_inputs, target)` for the shared epoch driver (`model(*inputs)`). Unpacking happens **after** collate (it reshapes the batched, padded tensors), so it lives in `src/data/unpackers.py`, not the dataset. The canonical set, selectable by name via `get_unpacker(task)`:
+
+| task | contract | used by |
+|---|---|---|
+| `person_frame` | single-frame crops → `((crops,), labels)` | B3 Stage A |
+| `person_seq` | temporal → `((seqs,), labels)` | B5 Stage A |
+| `person_track` | temporal → `((P=1 tracks, masks), labels)` | B6/B7/B8 Stage A |
+| `group_crop` | `((crops, masks), group)` | B3/B5/B6/B7 Stage B |
+| `group_team` | `((crops, masks, team_ids), group)` | B8 Stage B |
+
+Adding a new baseline = one model class + pick the matching unpacker; no changes to the loader or the training loop.
 
 ---
 
@@ -573,6 +661,8 @@ Project1/
 │   ├── baseline4.yaml           # Hydra config for B4
 │   ├── baseline5.yaml           # Hydra config for B5
 │   ├── baseline6.yaml           # Hydra config for B6
+│   ├── baseline7.yaml           # Hydra config for B7
+│   ├── baseline8.yaml           # Hydra config for B8
 │   └── transforms/
 │       ├── default_transforms.yaml  # FULL-FRAME baselines (B1, B4): 224×224 warp
 │       └── crop_transforms.yaml     # CROP baselines (B3, B5–B8): 224×224 warp
@@ -583,9 +673,10 @@ Project1/
 │   ├── load_frames_into_lmdb.py # Pack frames into LMDB
 │   ├── load_frames_into_pickle.py
 │   └── data/
-│       ├── base_dataset.py      # Shared dataset logic + collate_fn (storage-agnostic)
+│       ├── base_dataset.py      # Shared dataset logic + collate_fn (+ with_teams / team_ids)
 │       ├── data_loader.py       # LMDB backend
 │       ├── kaggle_data_loader.py# Direct-from-disk backend (Kaggle)
+│       ├── unpackers.py         # Central batch unpackers (person/group/team) + factory
 │       ├── data_summary.py      # Statistics and class distributions
 │       └── visualize_data.py    # Dataset visualization
 │
@@ -595,13 +686,14 @@ Project1/
 │   ├── baseline4.py             # B4: Frozen backbone → LSTM temporal classifier (✅ done)
 │   ├── baseline5.py             # B5: Per-player LSTM → pooled group head (✅ done)
 │   ├── baseline6.py             # B6: Pooled-scene LSTM + skip Conv1d (✅ done)
-│   ├── baseline7.py             # B7: hierarchical two-LSTM model (🔲 stub)
-│   └── baseline8.py             # B8: B7 + team-split pooling (🔲 stub)
+│   ├── baseline7.py             # B7: hierarchical two-LSTM + skips (⚙️ implemented)
+│   └── baseline8.py             # B8: B7 + team-split pooling (⚙️ implemented, untrained)
 │
 ├── utils/
-│   ├── utility.py               # Training/eval loop helpers + class-weight tools
+│   ├── utility.py               # Epoch driver + class-weight tools + checkpoint I/O
+│   ├── trainer.py               # Shared Trainer: one training stage per run_stage() call
 │   ├── featureExtractor.py      # Frozen CNN feature extractor (ImageNet or B1 checkpoint)
-│   ├── evaluate.py              # Post-training evaluation + plots
+│   ├── evaluate.py              # Post-training evaluation + plots (all baselines)
 │   ├── plotting.py              # Confusion matrix, PR curves, mAP
 │   ├── download_models.py       # Pull trained checkpoints from Google Drive
 │   └── load_model_config.py     # Hydra config → transforms/scheduler builders
@@ -615,7 +707,7 @@ Project1/
 ├── runs/                        # Hydra run outputs
 ├── logs/                        # Per-baseline TensorBoard + JSON metric logs
 └── plots/                       # Evaluation visualizations
-    └── baseline{1,3,4,5,6}/     # Four plots per baseline: Confusion Matrix,
+    └── baseline{1,3,4,5,6,7}/   # Four plots per baseline: Confusion Matrix,
                                  # Classification Report, PR Curves, mAP & F1
 ```
 
