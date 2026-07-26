@@ -79,7 +79,7 @@ Table~\ref{tab:baselines} lists the planned progression of models, each adding t
 
 \begin{table}[h]
     \centering
-    \caption{Baseline models. B1--B6 complete with results; B7--B8 implemented (B7 has one result from a superseded config, B8 untrained).}
+    \caption{Baseline models. B1--B7 complete with results (B7 leads); B8 implemented but untrained.}
     \label{tab:baselines}
     \begin{tabular}{lccc}
         \toprule
@@ -244,20 +244,20 @@ B7 is the paper's two-stage hierarchical model with skip connections at both lev
 
 \begin{table}[h]
     \centering
-    \caption{Baseline 7 test-set metrics --- \emph{superseded config} (see text).}
+    \caption{Baseline 7 test-set metrics (run 3).}
     \label{tab:b7-metrics}
     \begin{tabular}{lc}
         \toprule
         \textbf{Metric} & \textbf{Value} \\
         \midrule
-        Accuracy   & 65.81\% \\
-        Macro F1   & 0.637 \\
-        Test Loss  & 1.21 \\
+        Accuracy   & \textbf{73.75\%} \\
+        Macro F1   & \textbf{0.701} \\
+        Test Loss  & \textbf{0.89} \\
         \bottomrule
     \end{tabular}
 \end{table}
 
-These numbers are from an \textbf{initial single-phase run with the player model frozen} --- they land \emph{below} B6 (70.5\%) and even B5, the same ``frozen pretrained temporal weights cap performance'' lesson B6's run~1 taught. The code has since moved to the two-phase probe~$\to$~joint fine-tune scheme (unfreezing LSTM$_1$) plus AdamW, which is the run that will show whether the hierarchy pays off; it has not been re-run. B7 still pools all players side-blind, so its confusion matrix keeps the left/right leakage --- unaddressed until B8.
+B7 is the \textbf{best baseline in the project}: accuracy $+3.2$ points over B6 (73.8\% vs.\ 70.5\%), macro F1 0.701 vs.\ 0.686, and the lowest test loss (0.89). The full hierarchy pays off --- an adapting player-level LSTM feeding a scene-level LSTM beats B6's single scene-level LSTM over pooled frames. The result hinges on the \textbf{two-phase Stage B}: with LSTM$_1$ frozen the probe plateaus at ${\sim}0.51$ validation accuracy, and unfreezing it for the joint fine-tune lifts validation accuracy to ${\sim}0.68$ ($+0.17$). This is the same lesson as B6 (pretrained temporal weights must adapt to the group task) and explains why B7's earlier \emph{frozen} single-phase run scored only 65.8\%, below B6 --- unfreezing turned that into $+7.9$ points and the project lead. What B7 still does not fix is the left/right confusion: it pools all players side-blind, so winpoint/pass/set leak across sides. That is exactly B8's target.
 
 \section{Baseline 8: Team-Split Pooling}
 
@@ -267,7 +267,7 @@ B8 is implemented and shape-verified (forward/backward for both pool modes, chec
 
 \section{Next Steps}
 
-(i) \textbf{Re-run B7} under the two-phase (probe $\to$ joint fine-tune) + AdamW config that superseded its frozen single-phase result --- unfreezing LSTM$_1$ is what closed B6's probe/fine-tune gap, and B7 has more pretrained capacity to unlock. (ii) \textbf{Train and evaluate B8} --- its team-split pooling is the direct fix for the left/right winpoint/pass/set collapse diagnosed since B5, and the paper's largest single ablation gain. (iii) Reduce overfitting across all baselines --- stronger augmentation, higher dropout, and earlier stopping remain the levers (B6's fine-tune still reaches ${\sim}93\%$ train F1 against ${\sim}64\%$ validation).
+(i) \textbf{Train and evaluate B8} --- its team-split pooling (already implemented and shape-verified) is the direct fix for the left/right winpoint/pass/set confusion that persists through B7, and the paper's largest single ablation gain ($+11.6$ points there); built on B7's 73.8\% it should push higher if the $x$-coordinate team assignment is clean. (ii) Reduce overfitting across all baselines --- stronger augmentation, higher dropout, and earlier stopping remain the levers (B7's fine-tune still reaches ${\sim}94\%$ train accuracy against ${\sim}68\%$ validation).
 
 %----------------------------------------------------------
 

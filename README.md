@@ -11,7 +11,7 @@ The snapshot shows the output of `uv run python -m src.data.visualize_data` with
 ## At a Glance
 
 - **Dataset**: 55 volleyball videos, 4,830 clips, two annotation levels — 8 group activities (scene-level) and 9 person actions (player-level).
-- **Baselines**: 8 progressively complex models (B1–B8) sharing one data loader, training driver, and evaluator. **B1, B3, B4, B5, B6 are complete with results; B7 and B8 are implemented and shape-verified — B7 has one result from a superseded config, B8 is untrained.**
+- **Baselines**: 8 progressively complex models (B1–B8) sharing one data loader, training driver, and evaluator. **B1, B3, B4, B5, B6, B7 are complete with results; B8 is implemented and shape-verified but not yet trained.** B7 (the full hierarchical model) is currently the best.
 - **Stack**: PyTorch + Hydra config + TensorBoard logging; **AdamW** optimizer; shared `Trainer` (one stage per call) and central batch unpackers; multi-GPU via `nn.DataParallel`; Kaggle dual-T4 ready.
 - **Paper**: Ibrahim et al., *A Hierarchical Deep Temporal Model for Group Activity Recognition*, CVPR 2016 (+ journal extension, arXiv:1607.02643).
 
@@ -22,24 +22,12 @@ The snapshot shows the output of `uv run python -m src.data.visualize_data` with
 | B1 | Single middle frame → fine-tuned ResNet-50 | 62.60% | 0.630 | 1.42 |
 | B3 | Person crops → frozen backbone → concat-pool → MLP | 60.73% | 0.589 | 1.09 |
 | B4 | 9 frames → frozen B1 backbone → LSTM | 66.12% | 0.673 | 1.05 |
-| B5 | Per-player LSTM → pool summaries → MLP | 66.34% | 0.619 | **0.97** |
-| **B6** | **Pool players per frame → scene LSTM + skip Conv1d** | **70.53%** | **0.686** | 1.04 |
-| B7 | Hierarchical: player LSTM₁ → pool per frame → scene LSTM₂ (+ skips) | 65.81%† | 0.637† | 1.21† |
+| B5 | Per-player LSTM → pool summaries → MLP | 66.34% | 0.619 | 0.97 |
+| B6 | Pool players per frame → scene LSTM + skip Conv1d | 70.53% | 0.686 | 1.04 |
+| **B7** | **Hierarchical: player LSTM₁ → pool per frame → scene LSTM₂ (+ skips)** | **73.75%** | **0.701** | **0.89** |
 | B8 | B7 + team-split pooling (per-team, concat) | *untrained* | | |
 
-† B7's number is from an **initial single-phase run with the player model frozen** — since superseded by a two-phase (probe → joint fine-tune) + AdamW config that hasn't been re-run yet. Expect it to change. B8 is implemented and shape-verified but not yet trained. Per-baseline architecture, hyperparameters, and analysis: [Baselines & Results](#baselines--results).
-
----
-
-## Table of Contents
-
-- [Quick Start](#quick-start)
-- [Baselines & Results](#baselines--results)
-- [Dataset](#dataset)
-- [Data Pipeline](#data-pipeline)
-- [Data Loader API](#data-loader-api)
-- [Project Structure](#project-structure)
-- [References](#references)
+B7 (run 3, two-phase probe → joint fine-tune + AdamW) leads on every metric. B8 is implemented and shape-verified but not yet trained. Per-baseline architecture, hyperparameters, and analysis: [Baselines & Results](#baselines--results).
 
 ---
 
@@ -101,7 +89,7 @@ uv run python -m utils.evaluate --model baseline3_stage_b_run2.pt   --baseline b
 uv run python -m utils.evaluate --model baseline4_run2.pt           --baseline baseline4
 uv run python -m utils.evaluate --model baseline5_stage_b_run4.pt   --baseline baseline5 --batch-size 4
 uv run python -m utils.evaluate --model baseline6_stage_b_run2.pt   --baseline baseline6 --batch-size 4
-uv run python -m utils.evaluate --model baseline7_stage_b_run1.pt   --baseline baseline7 --batch-size 4
+uv run python -m utils.evaluate --model baseline7_stage_b_run3.pt   --baseline baseline7 --batch-size 4
 uv run python -m utils.evaluate --model baseline8_stage_b_run1.pt   --baseline baseline8 --batch-size 4   # once trained
 ```
 
@@ -120,10 +108,10 @@ The ladder is a designed ablation — each rung isolates one component (person c
 | **B4** | ✅ Done | 9 frames (full) | LSTM on frame features | ✗ | LSTM → 8 classes |
 | **B5** | ✅ Done | 9 frames (crops) | LSTM per player | Max+mean concat pool over players | MLP (8 classes) |
 | **B6** | ✅ Done | 9 frames (crops) | LSTM on pooled frames + skip Conv1d fusion | Max-pool per frame (frozen B3 features) | Conv1d summary → MLP (8 classes) |
-| **B7** | ⚙️ Implemented | 9 frames (crops) | LSTM₁ per player (+ feature-axis skip) + LSTM₂ (+ time-axis skip/Conv1d) | Pool per frame | LSTM₂ → 8 classes |
+| **B7** | ✅ Done | 9 frames (crops) | LSTM₁ per player (+ feature-axis skip) + LSTM₂ (+ time-axis skip/Conv1d) | Pool per frame | LSTM₂ → 8 classes |
 | **B8** | ⚙️ Implemented | 9 frames (crops) | Same as B7 | **Team-split** pool per frame (per-team, concat) | LSTM₂ → 8 classes |
 
-⚙️ = model implemented and shape-verified; B7 has an initial result, B8 is untrained. Each completed baseline below follows the same template: **architecture → test metrics → analysis**, with hyperparameters and evaluation plots collapsed.
+⚙️ = model implemented and shape-verified but untrained (B8). Each completed baseline below follows the same template: **architecture → test metrics → analysis**, with hyperparameters and evaluation plots collapsed.
 
 ### Baseline 1 — Single-Frame Image Classifier
 
@@ -378,18 +366,22 @@ B7 is the paper's two-stage hierarchical model: a **player-level LSTM₁** runs 
 
 </details>
 
-#### Test Metrics (run 1 — *superseded config*)
+#### Test Metrics (run 3)
 
 | Metric | Value |
 |--------|-------|
-| Accuracy | 65.81% |
-| Macro F1 | 0.637 |
-| Loss | 1.21 |
+| Accuracy | **73.75%** |
+| Macro F1 | **0.701** |
+| Loss | **0.89** |
 
-**Status.** This number comes from an **early single-phase run with the player model frozen** — it lands *below* B6 (70.5%) and even B5, exactly the "frozen pretrained temporal weights cap performance" lesson B6's run 1 taught. The code has since moved to the **two-phase probe → joint fine-tune** scheme (unfreezing LSTM₁) plus AdamW, which is the run that will tell whether the hierarchy actually pays off; it hasn't been re-run yet. Per-class, the run-1 confusion matrix shows the familiar left/right leakage — unaddressed here because B7 still pools all players side-blind.
+**Analysis.** B7 is the **best baseline in the project** — accuracy **+3.2 points over B6** (73.8% vs 70.5%), macro-F1 **+0.015** (0.701 vs 0.686), and the lowest test loss (0.89). The full hierarchy pays off: a player-level LSTM that adapts, feeding a scene-level LSTM, beats B6's single scene-level LSTM over pooled frames.
+
+The result hinges entirely on the **two-phase Stage B**, and the phase curves show why. With the player LSTM₁ frozen, the probe plateaus at ~0.51 validation accuracy; unfreezing LSTM₁ for the joint fine-tune lifts validation accuracy to ~0.68 (**+0.17**). That's the same lesson as B6 — the pretrained temporal weights must be allowed to adapt to the group task — and it's why B7's earlier *frozen* single-phase run scored only 65.8%, below B6. Unfreezing turned that into +7.9 points and the project lead.
+
+What B7 still does **not** fix is the left/right confusion: it pools all players side-blind, so winpoint/pass/set still leak across sides (see the confusion matrix). That is exactly what B8's team-split pooling targets.
 
 <details>
-<summary><b>Evaluation plots</b> (run 1)</summary>
+<summary><b>Evaluation plots</b> (run 3)</summary>
 
 | Confusion Matrix | Classification Report |
 |:---:|:---:|
@@ -421,7 +413,7 @@ Identical to B7, except the per-frame pooling is **per-team** and the scene vect
 
 #### Test Metrics
 
-*Untrained.* B8 is implemented and shape-verified (forward/backward for both pool modes, checkpoint round-trip, the zero-player-team edge case, and Stage A ignoring team_ids all pass a synthetic test), but has not been trained yet. Train with `uv run python -m models.baseline8`; it needs `baseline3_stage_a_run2.pt` and the team-mode loader. **Expectation:** this is the ablation rung that isolates team structure — in the paper, team-split pooling is worth **+11.6 points (70.3 → 81.9)** over all-player pooling, and it targets precisely the left/right errors the confusion matrices have shown since B5.
+*Untrained.* B8 is implemented and shape-verified (forward/backward for both pool modes, checkpoint round-trip, the zero-player-team edge case, and Stage A ignoring team_ids all pass a synthetic test), but has not been trained yet. Train with `uv run python -m models.baseline8`; it needs `baseline3_stage_a_run2.pt` and the team-mode loader. **Expectation:** this is the ablation rung that isolates team structure, built on top of B7's project-leading 73.8%. In the paper, team-split pooling is worth **+11.6 points (70.3 → 81.9)** over all-player pooling, and it targets precisely the left/right errors B7's confusion matrix still shows — so if the assignment is clean, B8 should push past B7.
 
 > [!note]
 > B8's result quality hinges on the loader's team assignment (x-coordinate ordering), which can mislabel players near mid-court. If B8 doesn't beat B7, inspect the team split before the pooling.
@@ -462,7 +454,8 @@ Identical to B7, except the per-frame pooling is **per-team** and the scene vect
 
 Split definitions live in `configs/data_split.py`.
 
-### Raw Directory Layout
+<details>
+<summary><b>Raw directory layout</b></summary>
 
 ```
 DataSet/
@@ -491,6 +484,8 @@ DataSet/
 ├── volleyball_master.json                 # Stage 1+2 unified output
 └── volleyball_master_pickle.pkl           # Fast-load cache
 ```
+
+</details>
 
 ---
 
@@ -528,53 +523,9 @@ graph TB
     end
 ```
 
-### Stage 1 — Player-Level Parsing
-
-```mermaid
-flowchart LR
-    subgraph "Per Clip (e.g. 0/3596)"
-        AD[action_detections.txt] -->|parse_detection_file| MJ
-        PD[person_detections.txt] -->|parse_detection_file| MJ
-        TK[3596.txt] -->|parse_tracking_file| MJ
-    end
-    MJ["Master JSON Entry<br>{actions, persons, tracking}"]
-```
-
-`create_master_json()` iterates over all 55 videos × ~90 clips each, parsing:
-
-| Source File | Parser | Output per Frame |
-|---|---|---|
-| `action_detections.txt` | `parse_detection_file()` | `{box: [x,y,w,h], score, label}` |
-| `person_detections.txt` | `parse_detection_file()` | `{box: [x,y,w,h], score, label}` |
-| `clip_id.txt` (tracking) | `parse_tracking_file()` | `{id, box: [x1,y1,x2,y2], flags, action}` |
-
-### Stage 2 — Scene-Level Enrichment
-
-```mermaid
-flowchart LR
-    AN[annotations.txt<br>per video] -->|parse_scene_annotations| SL["scene_labels<br>{video_id → {frame.jpg → group_activity}}"]
-    SL -->|merge_dataset_levels| MJ["Master JSON<br>+ scene_class per clip"]
-```
-
-`enrich_with_scene_labels()` reads each video's `annotations.txt` to extract the **group-activity label** (one of 8 scene classes) and attaches it to each clip as `"scene_class"`. The lookup is **keyed per video** and matches each clip's own middle frame (`<clip_id>.jpg`), since frame names are only unique *within* a video.
-
-### Pickle & LMDB Caching
-
-To avoid severe I/O bottlenecks and RAM exhaustion during training, the dataset is cached in two high-performance formats:
-
-1. **Annotations (Pickle)**: The enriched JSON (~1.6 GB) is dumped to pickle (`volleyball_master_pickle.pkl`, ~247 MB) for instantaneous metadata loading.
-2. **Frames (LMDB)**: The raw `.jpg` frames (~50 GB) are packed into a memory-mapped LMDB database (`frames_lmdb`) to allow lightning-fast lazy loading of image bytes on the fly.
-
-Both build scripts are **singletons** — they skip execution if the database already exists.
-
-```mermaid
-flowchart LR
-    JSON["volleyball_master.json<br>(1.6 GB)"] -->|src.pickle_dump| PKL["volleyball_master_pickle.pkl<br>(247 MB)"]
-    RAW["Raw .jpg frames<br>(~50 GB)"] -->|src.load_frames_into_lmdb| LMDB["frames_lmdb<br>(Memory-mapped)"]
-
-    PKL --> DS[VolleyballDataset]
-    LMDB --> DS
-```
+- **Stage 1 — player-level** (`create_master_json()`): parses `action_detections.txt` / `person_detections.txt` (→ `{box, score, label}`) and `clip_id.txt` tracking (→ `{id, box, flags, action}`) into one master JSON entry per clip.
+- **Stage 2 — scene-level** (`enrich_with_scene_labels()`): reads each video's `annotations.txt` for the group-activity label and attaches it as `scene_class`, keyed **per video** (frame names are unique only within a video).
+- **Caching**: enriched JSON (~1.6 GB) → pickle (~247 MB) for fast metadata; raw `.jpg` frames (~50 GB) → memory-mapped LMDB for fast lazy image loads. Both build scripts are singletons.
 
 ---
 
@@ -603,20 +554,6 @@ ds = VolleyballDataset(mode="train", n_frames=9, full_image=True, transform=tran
 
 # B5-B8: Cropped persons, 9-frame sequence → (crops [9,P,C,H,W], person_labels [P], group_label)
 ds = VolleyballDataset(mode="train", n_frames=9, crop=True, transform=transform)
-```
-
-### Return Shapes by Configuration
-
-```mermaid
-graph TD
-    DS[VolleyballDataset] --> FI{full_image?}
-    DS --> CR{crop?}
-
-    FI -->|n_frames=1| F1["(image, group_label)<br>B1"]
-    FI -->|n_frames=9| F9["(images [T,C,H,W], group_label)<br>B4"]
-
-    CR -->|n_frames=1| C1["(crops [P,C,H,W], person_labels [P], group_label)<br>B3"]
-    CR -->|n_frames=9| C9["(crops [T,P,C,H,W], person_labels [P], group_label)<br>B5-B8"]
 ```
 
 ### Collate Function
@@ -648,6 +585,9 @@ Adding a new baseline = one model class + pick the matching unpacker; no changes
 ---
 
 ## Project Structure
+
+<details>
+<summary><b>Directory tree</b></summary>
 
 ```
 Project1/
@@ -710,6 +650,8 @@ Project1/
     └── baseline{1,3,4,5,6,7}/   # Four plots per baseline: Confusion Matrix,
                                  # Classification Report, PR Curves, mAP & F1
 ```
+
+</details>
 
 ---
 
