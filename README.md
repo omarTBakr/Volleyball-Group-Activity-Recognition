@@ -36,10 +36,10 @@ The snapshot shows the output of `uv run python -m src.data.visualize_data` with
 
 - [Quick Start](#quick-start)
 - [Baselines & Results](#baselines--results)
+- [TensorBoard](#tensorboard)
 - [Dataset](#dataset)
 - [Data Pipeline](#data-pipeline)
 - [Data Loader API](#data-loader-api)
-- [TensorBoard](#tensorboard)
 - [Project Structure](#project-structure)
 - [References](#references)
 
@@ -506,6 +506,26 @@ The two-phase Stage B again mattered, but note how strong team pooling is on its
 
 ---
 
+## TensorBoard
+
+Every run logs per-epoch loss, accuracy, and macro-F1 to TensorBoard under `logs/<baseline>/tensorboard/<run>/`, namespaced by stage (`StageA/…`, `StageB/…`). Launch with:
+
+```bash
+uv run tensorboard --logdir logs
+```
+
+The dashboards below overlay the runs across baselines, so the two-stage training is directly comparable — **Stage A** (person-action pretraining, 9 classes) and **Stage B** (group-activity, 8 classes):
+
+**Stage A — person-action pretraining**
+
+![TensorBoard Stage A](logs/tensorboardStageA.png)
+
+**Stage B — group-activity classification**
+
+![TensorBoard Stage B](logs/tensorboardStageB.png)
+
+---
+
 ## Dataset
 
 ### Class Labels
@@ -667,26 +687,6 @@ An *unpacker* turns a collated batch into `(model_inputs, target)` for the share
 | `group_team` | `((crops, masks, team_ids), group)` | B8 Stage B |
 
 Adding a new baseline = one model class + pick the matching unpacker; no changes to the loader or the training loop.
-
----
-
-## TensorBoard
-
-Every run logs per-epoch loss, accuracy, and macro-F1 to TensorBoard under `logs/<baseline>/tensorboard/<run>/`, namespaced by stage (`StageA/…`, `StageB/…`). Launch with:
-
-```bash
-uv run tensorboard --logdir logs
-```
-
-The dashboards below overlay the runs across baselines, so the two-stage training is directly comparable — **Stage A** (person-action pretraining, 9 classes) and **Stage B** (group-activity, 8 classes):
-
-**Stage A — person-action pretraining**
-
-![TensorBoard Stage A](logs/tensorboardStageA.png)
-
-**Stage B — group-activity classification**
-
-![TensorBoard Stage B](logs/tensorboardStageB.png)
 
 ---
 
