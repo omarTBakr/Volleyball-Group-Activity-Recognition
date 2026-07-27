@@ -82,7 +82,7 @@ model:
   name: "resnet50"
   # B8 re-uses B3's Stage-A person-action backbone as the frozen spatial
   # feature extractor (same as B5/B6/B7).
-  checkpoint: "baseline3_stage_a_run2.pt"
+  checkpoint: "baseline3_stage_a_run3.pt"
 
 device: cuda
 seed: 42

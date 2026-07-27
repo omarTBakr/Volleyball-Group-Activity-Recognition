@@ -1,0 +1,34 @@
+direction: right
+
+legend: gray = frozen and green = trainable {
+  style.fill: "#ffffff"
+  style.stroke: "#bbbbbb"
+  style.font-size: 13
+}
+
+input: Middle frame {
+  style.fill: "#e6efff"
+}
+
+resnet: ResNet-50 {
+  style.fill: "#f4f4f4"
+  stem: conv1 and bn1 { style.fill: "#e8e8e8" }
+  l1: layer1 { style.fill: "#e8e8e8" }
+  l2: layer2 { style.fill: "#e8e8e8" }
+  l3: layer3 { style.fill: "#d6f5dd" }
+  l4: layer4 { style.fill: "#d6f5dd" }
+  gap: global average pool { style.fill: "#e8e8e8" }
+  stem -> l1 -> l2 -> l3 -> l4 -> gap
+}
+
+head: Linear head 2048 to 8 {
+  style.fill: "#d6f5dd"
+}
+
+out: Group activity logits {
+  style.fill: "#e6efff"
+}
+
+input -> resnet.stem: B x 3 x 224 x 224
+resnet.gap -> head: B x 2048
+head -> out: B x 8

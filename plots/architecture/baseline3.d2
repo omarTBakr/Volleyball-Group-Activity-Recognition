@@ -1,0 +1,35 @@
+direction: right
+
+legend: gray = frozen and green = trainable {
+  style.fill: "#ffffff"
+  style.stroke: "#bbbbbb"
+  style.font-size: 13
+}
+
+input: Person crops {
+  style.fill: "#e6efff"
+}
+
+resnet: ResNet-50 {
+  style.fill: "#d6f5dd"
+  tooltip: ImageNet pretrained and fine-tuned end to end in Stage A
+  stem: conv1 and bn1
+  l1: layer1
+  l2: layer2
+  l3: layer3
+  l4: layer4
+  gap: global average pool
+  stem -> l1 -> l2 -> l3 -> l4 -> gap
+}
+
+head: Linear head 2048 to 9 {
+  style.fill: "#d6f5dd"
+}
+
+out: Individual action logits {
+  style.fill: "#e6efff"
+}
+
+input -> resnet.stem: B*12 x 3 x 224 x 224
+resnet.gap -> head: B*12 x 2048
+head -> out: B*12 x 9

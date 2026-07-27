@@ -1,0 +1,59 @@
+direction: right
+
+legend: gray = frozen and green = trainable {
+  style.fill: "#ffffff"
+  style.stroke: "#bbbbbb"
+  style.font-size: 13
+}
+
+input: Player crop tracks {
+  style.fill: "#e6efff"
+}
+
+resnet: ResNet-50 frozen from Baseline 3 Stage A {
+  style.fill: "#e8e8e8"
+  stem: conv1 and bn1
+  l1: layer1
+  l2: layer2
+  l3: layer3
+  l4: layer4
+  gap: global average pool
+  stem -> l1 -> l2 -> l3 -> l4 -> gap
+}
+
+lstm1: Player LSTM 1 size 512 {
+  style.fill: "#d6f5dd"
+}
+
+skip1: Player feature axis skip lstm1 concat projected features {
+  style.fill: "#d6f5dd"
+}
+
+pool: Masked pool over players per frame {
+  style.fill: "#d6f5dd"
+}
+
+lstm2: Scene LSTM 2 size 512 {
+  style.fill: "#d6f5dd"
+}
+
+fusion: Time axis skip and Conv1d fusion {
+  style.fill: "#d6f5dd"
+}
+
+head: MLP head to 8 {
+  style.fill: "#d6f5dd"
+}
+
+out: Group activity logits {
+  style.fill: "#e6efff"
+}
+
+input -> resnet.stem: B x 9 x P x 3 x 224 x 224
+resnet.gap -> lstm1: B x 9 x P x 2048
+lstm1 -> skip1: B x 9 x P x 512
+skip1 -> pool: B x 9 x P x 1024
+pool -> lstm2: B x 9 x 2048
+lstm2 -> fusion: B x 9 x 512
+fusion -> head: B x 128
+head -> out: B x 8

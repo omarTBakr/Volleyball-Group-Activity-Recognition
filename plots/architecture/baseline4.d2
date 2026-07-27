@@ -1,0 +1,39 @@
+direction: right
+
+legend: gray = frozen and green = trainable {
+  style.fill: "#ffffff"
+  style.stroke: "#bbbbbb"
+  style.font-size: 13
+}
+
+input: 9 frame clip {
+  style.fill: "#e6efff"
+}
+
+resnet: ResNet-50 frozen from Baseline 1 {
+  style.fill: "#e8e8e8"
+  stem: conv1 and bn1
+  l1: layer1
+  l2: layer2
+  l3: layer3
+  l4: layer4
+  gap: global average pool
+  stem -> l1 -> l2 -> l3 -> l4 -> gap
+}
+
+lstm: LSTM 512 {
+  style.fill: "#d6f5dd"
+}
+
+head: MLP head 512 to 256 to 8 {
+  style.fill: "#d6f5dd"
+}
+
+out: Group activity logits {
+  style.fill: "#e6efff"
+}
+
+input -> resnet.stem: B x 9 x 3 x 224 x 224
+resnet.gap -> lstm: B x 9 x 2048
+lstm -> head: B x 512
+head -> out: B x 8

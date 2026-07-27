@@ -1,0 +1,44 @@
+direction: right
+
+legend: gray = frozen and green = trainable {
+  style.fill: "#ffffff"
+  style.stroke: "#bbbbbb"
+  style.font-size: 13
+}
+
+input: Player crop tracks {
+  style.fill: "#e6efff"
+}
+
+resnet: ResNet-50 frozen from Baseline 3 Stage A {
+  style.fill: "#e8e8e8"
+  stem: conv1 and bn1
+  l1: layer1
+  l2: layer2
+  l3: layer3
+  l4: layer4
+  gap: global average pool
+  stem -> l1 -> l2 -> l3 -> l4 -> gap
+}
+
+lstm1: Player LSTM 3072 frozen from Stage A {
+  style.fill: "#e8e8e8"
+}
+
+pool: Masked concat pool over players {
+  style.fill: "#d6f5dd"
+}
+
+head: MLP head 6144 to 3072 to 1536 to 8 {
+  style.fill: "#d6f5dd"
+}
+
+out: Group activity logits {
+  style.fill: "#e6efff"
+}
+
+input -> resnet.stem: B*P x 9 x 3 x 224 x 224
+resnet.gap -> lstm1: B*P x 9 x 2048
+lstm1 -> pool: B x P x 3072
+pool -> head: B x 6144
+head -> out: B x 8

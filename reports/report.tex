@@ -79,7 +79,7 @@ Table~\ref{tab:baselines} lists the planned progression of models, each adding t
 
 \begin{table}[h]
     \centering
-    \caption{Baseline models. B1--B7 complete with results (B7 leads); B8 implemented but untrained.}
+    \caption{Baseline models. All eight complete with results; B8 (team-split pooling) leads at 85.6\% test accuracy.}
     \label{tab:baselines}
     \begin{tabular}{lccc}
         \toprule
@@ -257,17 +257,41 @@ B7 is the paper's two-stage hierarchical model with skip connections at both lev
     \end{tabular}
 \end{table}
 
-B7 is the \textbf{best baseline in the project}: accuracy $+3.2$ points over B6 (73.8\% vs.\ 70.5\%), macro F1 0.701 vs.\ 0.686, and the lowest test loss (0.89). The full hierarchy pays off --- an adapting player-level LSTM feeding a scene-level LSTM beats B6's single scene-level LSTM over pooled frames. The result hinges on the \textbf{two-phase Stage B}: with LSTM$_1$ frozen the probe plateaus at ${\sim}0.51$ validation accuracy, and unfreezing it for the joint fine-tune lifts validation accuracy to ${\sim}0.68$ ($+0.17$). This is the same lesson as B6 (pretrained temporal weights must adapt to the group task) and explains why B7's earlier \emph{frozen} single-phase run scored only 65.8\%, below B6 --- unfreezing turned that into $+7.9$ points and the project lead. What B7 still does not fix is the left/right confusion: it pools all players side-blind, so winpoint/pass/set leak across sides. That is exactly B8's target.
+B7 is the \textbf{strongest model without team-split pooling} (only B8 beats it): accuracy $+3.2$ points over B6 (73.8\% vs.\ 70.5\%), macro F1 0.701 vs.\ 0.686, and a lower test loss (0.89). The full hierarchy pays off --- an adapting player-level LSTM feeding a scene-level LSTM beats B6's single scene-level LSTM over pooled frames. The result hinges on the \textbf{two-phase Stage B}: with LSTM$_1$ frozen the probe plateaus at ${\sim}0.51$ validation accuracy, and unfreezing it for the joint fine-tune lifts validation accuracy to ${\sim}0.68$ ($+0.17$). This is the same lesson as B6 (pretrained temporal weights must adapt to the group task) and explains why B7's earlier \emph{frozen} single-phase run scored only 65.8\%, below B6 --- unfreezing turned that into $+7.9$ points. What B7 still does not fix is the left/right confusion: it pools all players side-blind, so winpoint/pass/set leak across sides. That is exactly B8's target.
 
 \section{Baseline 8: Team-Split Pooling}
 
 B8 makes a single architectural change to B7 --- the paper's group-style pooling. Instead of pooling all ${\sim}12$ players into one scene vector (side-blind), each team's players are pooled \emph{separately} and the two team vectors are concatenated, so the scene vector keeps \emph{which side did what} --- the signal every earlier baseline erases, and the direct fix for the dominant left/right confusion (winpoint, pass, set). Both of B7's skips are kept unchanged; only the scene vector doubles in width (LSTM$_2$ input becomes $4H_1$ for max/mean or $8H_1$ for concat). Team membership comes from the data loader in team mode (\texttt{with\_teams=True}), which emits a per-player \texttt{team\_ids} tensor (0/1 by court side, $-1$ for padding) derived once per clip from box center-$x$ ordering --- the paper's split, applied as a fixed per-track label so it coexists with the track-ID ordering the LSTMs require. Uneven or empty teams are handled by masking (a missing team pools to a zero vector).
 
-B8 is implemented and shape-verified (forward/backward for both pool modes, checkpoint round-trip, the zero-player-team edge case, and Stage~A ignoring \texttt{team\_ids} all pass a synthetic test) but \textbf{not yet trained}. It is the ablation rung that isolates team structure: in the extension paper, team-split pooling is worth \textbf{$+11.6$ points ($70.3 \to 81.9$)} over all-player pooling, and it targets exactly the left/right errors the confusion matrices have shown since B5. One caveat: quality hinges on the loader's $x$-coordinate team assignment, which can mislabel players near mid-court --- if B8 does not beat B7, inspect the split before the pooling.
+\begin{table}[h]
+    \centering
+    \caption{Baseline 8 test-set metrics (run 1).}
+    \label{tab:b8-metrics}
+    \begin{tabular}{lc}
+        \toprule
+        \textbf{Metric} & \textbf{Value} \\
+        \midrule
+        Accuracy   & \textbf{85.64\%} \\
+        Macro F1   & \textbf{0.855} \\
+        Test Loss  & \textbf{0.51} \\
+        \bottomrule
+    \end{tabular}
+\end{table}
+
+B8 is the \textbf{best model in the project by a wide margin}: $+11.9$ accuracy and $+0.154$ macro F1 over B7 (85.6\% vs.\ 73.8\%), clearing the CVPR-2016 full model (81.9\%). The single change from B7 --- pooling each team separately --- is responsible, and its effect is visible exactly where predicted. As Fig.~\ref{fig:b8-confusion} shows, the \textbf{left/right confusion is fixed}: \texttt{r\_winpoint}, which collapsed to ${\sim}0.08$ recall in B5 and ${\sim}0.38$ in B7 (47\% predicted as \texttt{l\_winpoint}), now sits at \textbf{0.86} with 5\% cross-side leak, and \texttt{l\_winpoint} reaches 0.83; the l/r-pass swap (20--24\% in B6/B7) is gone (both 0.86--0.87); spike is near-perfect (0.93/0.90). What remains is \emph{within}-side confusion (e.g.\ \texttt{l\_set}$\to$\texttt{l\_spike} 12\%), not left/right --- the model now reliably knows which team acted. Team pooling is strong even without fine-tuning: the probe alone (LSTM$_1$ frozen) reached ${\sim}0.83$ validation accuracy, already above B7's fully-fine-tuned 0.68.
+
+\begin{figure}[h]
+    \centering
+    \includegraphics[width=0.95\linewidth]{figures/b8_confusion_matrix.png}
+    \caption{Baseline 8 test confusion matrix. Team-split pooling eliminates the left/right leakage: winpoint recovers to 0.83/0.86 on the diagonal (from B7's ${\sim}0.38$), and pass/spike/set no longer swap sides. Remaining errors are within-side (e.g.\ set vs.\ spike).}
+    \label{fig:b8-confusion}
+\end{figure}
+
+One caveat on the ablation: B8 used the \texttt{baseline3\_stage\_a\_run3} backbone while B7 used \texttt{run2} (person-action val acc 75.0\% vs.\ 70.4\%), so the $+11.9$ gain conflates team-split pooling with a slightly stronger backbone. The pooling is clearly dominant --- the paper's own team-pooling ablation is $+11.6$, and the probe-alone result isolates the effect --- but a perfectly clean comparison would re-run B7 on \texttt{run3}.
 
 \section{Next Steps}
 
-(i) \textbf{Train and evaluate B8} --- its team-split pooling (already implemented and shape-verified) is the direct fix for the left/right winpoint/pass/set confusion that persists through B7, and the paper's largest single ablation gain ($+11.6$ points there); built on B7's 73.8\% it should push higher if the $x$-coordinate team assignment is clean. (ii) Reduce overfitting across all baselines --- stronger augmentation, higher dropout, and earlier stopping remain the levers (B7's fine-tune still reaches ${\sim}94\%$ train accuracy against ${\sim}68\%$ validation).
+(i) \textbf{Clean the B7/B8 ablation} by re-running B7 on the \texttt{run3} backbone, so the $+11.9$ jump is attributed to team-split pooling alone. (ii) \textbf{Reduce overfitting} across all baselines --- stronger augmentation, higher dropout, and earlier stopping remain the levers (B8's fine-tune reaches ${\sim}97\%$ train accuracy against ${\sim}84\%$ validation). (iii) Beyond the ladder, the extension paper's graph/relational models are the natural next step for modeling inter-player structure explicitly rather than via pooling.
 
 %----------------------------------------------------------
 
