@@ -1,0 +1,102 @@
+{
+  "gpu": "NVIDIA GeForce RTX 4060 Laptop GPU",
+  "total_gb": 7.65,
+  "free_gb": 7.5,
+  "family": "yolo26",
+  "task": "classify",
+  "imgsz": 224,
+  "requested_imgsz": 224,
+  "nc": 8,
+  "max_objects": 12,
+  "amp": true,
+  "fraction": 0.85,
+  "scale": "x",
+  "scale_name": "extra-large",
+  "model": "yolo26x-cls.pt",
+  "batch": 64,
+  "peak_gb": 4.3,
+  "stage1": [
+    {
+      "scale": "x",
+      "batch": 4,
+      "imgsz": 224,
+      "status": "fits",
+      "task": "classify",
+      "peak_gb": 0.6779985427856445,
+      "budget_gb": 6.3753112792968745,
+      "detail": ""
+    }
+  ],
+  "stage2": [
+    {
+      "scale": "x",
+      "batch": 1,
+      "imgsz": 224,
+      "status": "fits",
+      "task": "classify",
+      "peak_gb": 0.5623106956481934,
+      "budget_gb": 6.307244873046875,
+      "detail": ""
+    },
+    {
+      "scale": "x",
+      "batch": 2,
+      "imgsz": 224,
+      "status": "fits",
+      "task": "classify",
+      "peak_gb": 0.5647978782653809,
+      "budget_gb": 6.305584716796875,
+      "detail": ""
+    },
+    {
+      "scale": "x",
+      "batch": 4,
+      "imgsz": 224,
+      "status": "fits",
+      "task": "classify",
+      "peak_gb": 0.6771440505981445,
+      "budget_gb": 6.305584716796875,
+      "detail": ""
+    },
+    {
+      "scale": "x",
+      "batch": 8,
+      "imgsz": 224,
+      "status": "fits",
+      "task": "classify",
+      "peak_gb": 0.9288034439086914,
+      "budget_gb": 6.305584716796875,
+      "detail": ""
+    },
+    {
+      "scale": "x",
+      "batch": 16,
+      "imgsz": 224,
+      "status": "fits",
+      "task": "classify",
+      "peak_gb": 1.4264802932739258,
+      "budget_gb": 6.305584716796875,
+      "detail": ""
+    },
+    {
+      "scale": "x",
+      "batch": 32,
+      "imgsz": 224,
+      "status": "fits",
+      "task": "classify",
+      "peak_gb": 2.4240427017211914,
+      "budget_gb": 6.305584716796875,
+      "detail": ""
+    },
+    {
+      "scale": "x",
+      "batch": 64,
+      "imgsz": 224,
+      "status": "fits",
+      "task": "classify",
+      "peak_gb": 4.301093101501465,
+      "budget_gb": 6.305584716796875,
+      "detail": ""
+    }
+  ]
+}

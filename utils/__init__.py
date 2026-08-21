@@ -10,6 +10,12 @@ plotting
     precision-recall curves, classification reports, and mAP charts.
 load_model_config
     Hydra-driven model, transform, and scheduler builders.
+yolo_export
+    Rewrites the volleyball frames into the Ultralytics classification
+    layout (ImageFolder by group activity).
+yolo_probe
+    Two-stage YOLO capacity probe — largest model scale this GPU can
+    train, then the largest batch size for that scale.
 """
 
 # from .plotting import (

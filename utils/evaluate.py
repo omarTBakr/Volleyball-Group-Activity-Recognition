@@ -16,6 +16,7 @@ from __future__ import annotations
 import argparse
 import re
 import sys
+from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -673,6 +674,114 @@ def _run_inference(
 
 
 # ═════════════════════════════════════════════════════════════════════════════
+# 4b. Ultralytics Classification Inference (Baseline 9)
+# ═════════════════════════════════════════════════════════════════════════════
+#
+# B9 is the odd one out: Ultralytics owns its training loop, its checkpoint is
+# a YOLO classifier rather than one of our ``nn.Module`` builds, and its data
+# is the ImageFolder tree ``utils.yolo_export`` writes — not VolleyballDataset.
+# So the model/loader factory above cannot serve it. Everything downstream is
+# shared: this produces the same ``(y_true, y_pred, y_score)`` triple as
+# :func:`_run_inference`, in the project's class order, and hands it to the
+# same :func:`_generate_plots`.
+
+
+def _resolve_yolo_weights(model_filename: str) -> Path:
+    """
+    Locate B9's checkpoint.
+
+    Accepts an absolute/relative path to a ``.pt`` file, or a bare filename to
+    look up in B9's Ultralytics run directory (``PROJECT/RUN_NAME/weights/``),
+    which is where ``models/baseline9.py`` writes ``best.pt`` / ``last.pt``.
+    """
+    from models.baseline9 import PROJECT, RUN_NAME
+
+    candidate = Path(model_filename)
+    if candidate.is_file():
+        return candidate
+
+    weights_dir = PROJECT / RUN_NAME / "weights"
+    candidate = weights_dir / (Path(model_filename).name or "best.pt")
+    if not candidate.is_file():
+        raise SystemExit(
+            f"Checkpoint not found: {candidate}\n"
+            "Train it first (`python models/baseline9.py`), or pass a full path "
+            "with --model.",
+        )
+    return candidate
+
+
+def _yolo_cls_inference(
+    weights: Path,
+    device: torch.device,
+    *,
+    batch_size: int,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Run B9's YOLO classifier over the exported test split.
+
+    Returns
+    -------
+    (y_true, y_pred, y_score)
+        Same contract as :func:`_run_inference` — and, importantly, in the
+        project's class order (``configs.labels.GROUP_ACTIVITY_TO_IDX``), not
+        Ultralytics' alphabetical ImageFolder order, so B9's plots line up
+        class-for-class with every other baseline's.
+    """
+    from ultralytics import YOLO  # ty:ignore[import]
+    from ultralytics.cfg import get_cfg  # ty:ignore[import]
+    from ultralytics.data.dataset import ClassificationDataset  # ty:ignore[import]
+
+    from configs.labels import GROUP_ACTIVITY_TO_IDX
+    from models.baseline9 import DATA_ROOT, IMG_SIZE
+
+    test_root = DATA_ROOT / "test"
+    if not test_root.is_dir():
+        raise SystemExit(
+            f"Exported test split not found: {test_root}\n"
+            "Export it first: python -m utils.yolo_export",
+        )
+
+    # augment=False → Ultralytics' eval transform (resize + center crop), the
+    # exact preprocessing model.val() uses, so these numbers match training's.
+    args = get_cfg(overrides={"imgsz": IMG_SIZE, "fraction": 1.0})
+    dataset = ClassificationDataset(
+        root=str(test_root), args=args, augment=False, prefix="test",
+    )
+    loader = DataLoader(dataset, batch_size=batch_size, shuffle=False, num_workers=4)
+
+    # ImageFolder indexes classes alphabetically; remap[folder_idx] = project_idx.
+    folder_names = [
+        name for name, _ in sorted(dataset.base.class_to_idx.items(), key=lambda kv: kv[1])
+    ]
+    remap = np.array([GROUP_ACTIVITY_TO_IDX[name] for name in folder_names])
+    column_order = np.argsort(remap)  # folder columns, ordered by project index
+
+    net = YOLO(str(weights)).model.to(device).eval().float()
+
+    y_true_all: list[np.ndarray] = []
+    y_pred_all: list[np.ndarray] = []
+    y_score_all: list[np.ndarray] = []
+
+    print(f"\nEvaluating {weights.name} on {device} over {len(dataset)} test images ...")
+    with torch.no_grad():
+        for batch in tqdm(loader, desc="Testing"):
+            output = net(batch["img"].to(device))
+            if isinstance(output, (list, tuple)):
+                output = output[0]
+            probs = F.softmax(output.float(), dim=1).cpu().numpy()
+
+            y_true_all.append(remap[batch["cls"].numpy()])
+            y_pred_all.append(remap[probs.argmax(axis=1)])
+            y_score_all.append(probs[:, column_order])
+
+    return (
+        np.concatenate(y_true_all),
+        np.concatenate(y_pred_all),
+        np.concatenate(y_score_all),
+    )
+
+
+# ═════════════════════════════════════════════════════════════════════════════
 # 5. Plot Generation
 # ═════════════════════════════════════════════════════════════════════════════
 
@@ -731,6 +840,16 @@ def evaluate(
         config's value. Lower it when eval OOMs on the available GPU.
     """
     device = get_device(device)
+
+    # B9 has no Hydra config, no VolleyballDataset loader and no nn.Module
+    # build — only the plots are shared, so it branches out before all three.
+    if baseline_name == "baseline9":
+        y_true, y_pred, y_score = _yolo_cls_inference(
+            _resolve_yolo_weights(model_filename), device, batch_size=batch_size or 64,
+        )
+        _generate_plots(y_true, y_pred, y_score, CLASS_NAMES, baseline_name)
+        print(f"\n✓ Done! All plots saved to 'plots/{baseline_name}/'.")
+        return
 
     # ── Config ────────────────────────────────────────────────────────
     configs_dir = str(BASE_DIR / "configs")

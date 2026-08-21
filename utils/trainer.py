@@ -33,6 +33,7 @@ checkpoint on validation macro-F1 (the metric every baseline optimized).
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import torch
 from torch import nn, optim
@@ -51,6 +52,22 @@ from utils.utility import (
 )
 
 
+#: JSON metric key → TensorBoard scalar tag. :meth:`Trainer.log_epoch` plots
+#: every key it finds here and stores the whole record in the JSON log, so a
+#: baseline that has no value for one (B9 reports no train-side accuracy, the
+#: torch baselines report no top-5) simply omits it.
+_TB_TAGS: dict[str, str] = {
+    "train_loss": "Loss/train",
+    "val_loss": "Loss/val",
+    "train_acc": "Acc/train",
+    "val_acc": "Acc/val",
+    "val_top5": "Acc5/val",
+    "train_f1": "F1/train",
+    "val_f1": "F1/val",
+    "learning_rate": "LR",
+}
+
+
 class Trainer:
     """Runs one training stage per :meth:`run_stage` call; owns cross-stage state."""
 
@@ -61,12 +78,15 @@ class Trainer:
         *,
         device: torch.device | None = None,
         writer: SummaryWriter | None = None,
+        log_root: Path | None = None,
     ) -> None:
         self.baseline = baseline
         self.run_id = run_id
         self.device = device or get_device()
 
-        self.log_dir = LOGS_DIR / baseline
+        # ``log_root`` overrides the repo's LOGS_DIR — for runs whose output has
+        # to live off the repo's own disk (B9 writes to the internal SSD).
+        self.log_dir = (log_root or LOGS_DIR) / baseline
         self.log_dir.mkdir(parents=True, exist_ok=True)
         self.json_path = self.log_dir / f"{run_id}.json"
         self.writer = writer or SummaryWriter(
@@ -94,6 +114,68 @@ class Trainer:
         return float(optimizer.param_groups[0]["lr"])
 
     # ── public API ────────────────────────────────────────────────────────
+
+    def log_epoch(self, record: dict, *, tb_prefix: str = "") -> None:
+        """
+        Record one epoch: TensorBoard scalars plus a row in the JSON history.
+
+        This is the whole logging half of :meth:`run_stage`, split out so a
+        baseline that does **not** run our epoch loop can still log the same
+        way — B9 hands its training to Ultralytics and calls this from that
+        trainer's ``on_fit_epoch_end`` callback.
+
+        Parameters
+        ----------
+        record : dict
+            One epoch's metrics; ``"epoch"`` is the step every scalar is
+            plotted against. Keys listed in :data:`_TB_TAGS` also become
+            scalars, the rest are JSON-only. Stored verbatim.
+        tb_prefix : str, optional
+            Namespace for the scalars (e.g. ``"StageA"``).
+
+        """
+        prefix = f"{tb_prefix}/" if tb_prefix else ""
+        step = record["epoch"]
+        for key, tag in _TB_TAGS.items():
+            if record.get(key) is not None:
+                self.writer.add_scalar(f"{prefix}{tag}", float(record[key]), step)
+        self.metrics_history.append(record)
+        self._flush_json()
+
+    def record_test(
+        self,
+        *,
+        test_loss: float,
+        test_acc: float,
+        test_f1: float,
+        hparam_dict: dict,
+        best_val_f1: float,
+        extra: dict | None = None,
+    ) -> None:
+        """
+        Store the final metrics in the JSON log and write the TensorBoard
+        summary card. :meth:`run_test` calls this once it has evaluated the
+        test set; baselines that produce those numbers some other way (B9's
+        Ultralytics validator) call it directly. ``extra`` adds JSON-only
+        fields, e.g. which split was evaluated.
+        """
+        self._test = {
+            "test_loss": test_loss,
+            "test_acc": test_acc,
+            "test_f1": test_f1,
+            **(extra or {}),
+        }
+        self._flush_json()
+
+        log_experiment_summary(
+            writer=self.writer,
+            run_id=self.run_id,
+            hparam_dict=hparam_dict,
+            test_f1=test_f1,
+            test_acc=test_acc,
+            test_loss=test_loss,
+            best_val_f1=best_val_f1,
+        )
 
     def run_stage(
         self,
@@ -132,7 +214,6 @@ class Trainer:
             raise ValueError(f"select_metric must be 'f1' or 'acc', got '{select_metric}'.")
         save_ref = save_ref if save_ref is not None else model
         tag = (tb_prefix if tb_prefix is not None else stage) or ""
-        prefix = f"{tag}/" if tag else ""
         label = f" ({stage})" if stage else ""
         metric_label = select_metric.upper()
 
@@ -165,23 +246,16 @@ class Trainer:
                 scheduler.step()
             lr = self._current_lr(optimizer, scheduler)
 
-            self.writer.add_scalar(f"{prefix}Loss/train", train_loss, self.global_epoch)
-            self.writer.add_scalar(f"{prefix}Loss/val", val_loss, self.global_epoch)
-            self.writer.add_scalar(f"{prefix}F1/train", train_f1, self.global_epoch)
-            self.writer.add_scalar(f"{prefix}F1/val", val_f1, self.global_epoch)
-            self.writer.add_scalar(f"{prefix}LR", lr, self.global_epoch)
-
             print(f"Train -> Loss: {train_loss:.4f}, Acc: {train_acc:.4f}, F1: {train_f1:.4f}")
             print(f"Val   -> Loss: {val_loss:.4f}, Acc: {val_acc:.4f}, F1: {val_f1:.4f}")
 
-            self.metrics_history.append({
+            self.log_epoch({
                 "epoch": self.global_epoch,
                 "stage": stage,
                 "train_loss": train_loss, "train_acc": train_acc, "train_f1": train_f1,
                 "val_loss": val_loss, "val_acc": val_acc, "val_f1": val_f1,
                 "learning_rate": lr,
-            })
-            self._flush_json()
+            }, tb_prefix=tag)
 
             selected = val_acc if select_metric == "acc" else val_f1
             if selected > best:
@@ -222,16 +296,11 @@ class Trainer:
         )
         print(f"Final Test -> Loss: {test_loss:.4f}, Acc: {test_acc:.4f}, F1: {test_f1:.4f}")
 
-        self._test = {"test_loss": test_loss, "test_acc": test_acc, "test_f1": test_f1}
-        self._flush_json()
-
-        log_experiment_summary(
-            writer=self.writer,
-            run_id=self.run_id,
-            hparam_dict=hparam_dict,
-            test_f1=test_f1,
-            test_acc=test_acc,
+        self.record_test(
             test_loss=test_loss,
+            test_acc=test_acc,
+            test_f1=test_f1,
+            hparam_dict=hparam_dict,
             best_val_f1=best_val_f1,
         )
         return test_loss, test_acc, test_f1
@@ -242,7 +311,7 @@ class Trainer:
     # Allocate the next run id for a baseline, matching the historical
     # "count existing json logs + 1" scheme so runs stay sequentially named.
     @staticmethod
-    def next_run_id(baseline: str) -> str:
-        log_dir = LOGS_DIR / baseline
+    def next_run_id(baseline: str, log_root: Path | None = None) -> str:
+        log_dir = (log_root or LOGS_DIR) / baseline
         log_dir.mkdir(parents=True, exist_ok=True)
         return f"run{len(list(log_dir.glob('*.json'))) + 1}"

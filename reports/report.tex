@@ -79,7 +79,7 @@ Table~\ref{tab:baselines} lists the planned progression of models, each adding t
 
 \begin{table}[h]
     \centering
-    \caption{Baseline models. All eight complete with results; B8 (team-split pooling) leads at 85.6\% test accuracy.}
+    \caption{Baseline models. All eight ladder models complete with results; B8 (team-split pooling) leads at 85.6\% test accuracy. B9 is the control: the same task with none of the player-level structure.}
     \label{tab:baselines}
     \begin{tabular}{lccc}
         \toprule
@@ -92,6 +92,8 @@ Table~\ref{tab:baselines} lists the planned progression of models, each adding t
         B6 & LSTM/image & Max-pool/frame & LSTM + skip Conv1d \\
         B7 & LSTM$_1$ + LSTM$_2$ & Pool/frame & LSTM$_2$ + skips \\
         B8 & LSTM$_1$ + LSTM$_2$ & Team-split & LSTM$_2$ + skips \\
+        \midrule
+        B9 & --- & --- & YOLO frame clf. \\
         \bottomrule
     \end{tabular}
 \end{table}
@@ -289,9 +291,44 @@ B8 is the \textbf{best model in the project by a wide margin}: $+11.9$ accuracy 
 
 One caveat on the ablation: B8 used the \texttt{baseline3\_stage\_a\_run3} backbone while B7 used \texttt{run2} (person-action val acc 75.0\% vs.\ 70.4\%), so the $+11.9$ gain conflates team-split pooling with a slightly stronger backbone. The pooling is clearly dominant --- the paper's own team-pooling ablation is $+11.6$, and the probe-alone result isolates the effect --- but a perfectly clean comparison would re-run B7 on \texttt{run3}.
 
+\section{Baseline 9: One Model, No Player Annotations}
+
+Every baseline from B3 onward assumes the paper's premise: group activity is a function of what the individual players are doing, so the model needs boxes, tracks, person-action labels and a hierarchy to pool them. B9 tests that premise by discarding all of it. A single pretrained \textbf{YOLO26-x classifier} consumes the whole $224\times224$ frame and predicts one of the 8 group activities directly --- no detector head, no crops, no \texttt{team\_ids}, no LSTM, no staged schedule, and \emph{not one player annotation is read}. It is the ``throw a large pretrained model at it'' answer, included because it is the honest control for everything the ladder builds.
+
+Two pieces of plumbing make it fit the project. \texttt{utils/yolo\_export.py} rewrites the same annotations into the ImageFolder layout Ultralytics requires, honouring the project's video split so the test set is the same 16 videos, and \emph{warps} frames to a square rather than symlinking them: Ultralytics' \texttt{Resize} + \texttt{CenterCrop} would discard 44\% of the court width, and with 8 classes in left/right pairs the court width \emph{is} the label. \texttt{utils/yolo\_probe.py} walks the scale ladder to find the largest architecture the GPU can train and ladders the batch size for it. Ultralytics owns the training loop, so B9 cannot use our \texttt{Trainer} to run --- but it still uses it as the \emph{log sink}: \texttt{Trainer.log\_epoch} and \texttt{Trainer.record\_test} are called from Ultralytics' own callbacks, so B9's scalars, per-epoch JSON and hyperparameter card come out in the same format as B1--B8, and \texttt{utils/evaluate.py} grew a YOLO path that emits the same four plots in the same class order.
+
+\begin{table}[h]
+    \centering
+    \caption{Baseline 9 test-set metrics (run 3, the checkpoint on disk). Scored per frame over 13{,}370 test frames; B1--B8 are scored per clip over 1{,}337 clips.}
+    \label{tab:b9-metrics}
+    \begin{tabular}{lc}
+        \toprule
+        \textbf{Metric} & \textbf{Value} \\
+        \midrule
+        Accuracy        & \textbf{78.86\%} \\
+        Macro F1        & \textbf{0.802} \\
+        Top-5 accuracy  & 98.86\% \\
+        Test Loss       & --- \\
+        \bottomrule
+    \end{tabular}
+\end{table}
+
+\textbf{B9 fails in the opposite direction from B1--B7.} The entire B5$\to$B8 storyline was left/right confusion: side-blind pooling drove \texttt{r\_winpoint} to 0.08 recall in B5 and 0.38 in B7, and team-split pooling was the fix. B9 does not have that problem. As Fig.~\ref{fig:b9-confusion} shows, its \emph{winpoints are its two best classes} (\texttt{l\_winpoint} 0.90, \texttt{r\_winpoint} 0.86, with 6--8\% cross-side leak), which is intuitive: a winpoint is a whole-scene state --- players scattered, celebrating --- and a full-frame model reads scene layout without needing to know who acted. What B9 loses is the fine-grained action distinction \emph{within} a side: the five largest off-diagonal cells are all same-side action swaps (\texttt{r\_set}$\to$\texttt{r-pass} 0.23, \texttt{l\_set}$\to$\texttt{l-pass} 0.17, \texttt{r-pass}$\to$\texttt{r\_set} 0.16, \texttt{r\_spike}$\to$\texttt{r\_set} 0.11, \texttt{l-pass}$\to$\texttt{l\_set} 0.11). Set and pass differ by one player's arm posture, and in a $224\times224$ full frame that player occupies roughly $17\times62$ pixels --- the evidence is not resolvable at that scale. Spike, which has a distinctive whole-body silhouette, survives at 0.87/0.82.
+
+\begin{figure}[h]
+    \centering
+    \includegraphics[width=0.95\linewidth]{figures/b9_confusion_matrix.png}
+    \caption{Baseline 9 test confusion matrix. The left/right problem that dominated B5--B7 is absent --- winpoint is the strongest class (0.90/0.86) --- but set and pass swap \emph{within} a side (0.17--0.23), the distinction a $17\times62$-pixel player cannot support.}
+    \label{fig:b9-confusion}
+\end{figure}
+
+This is precisely the trade the hierarchy makes explicit: \textbf{player crops buy resolution on the action; team-split pooling buys the side.} B9 gets the side for free from global scene layout and loses the action; B1--B7 got the action from crops and lost the side until B8 restored it. Quantitatively the hierarchy is worth roughly $+3$ to $+7$ accuracy points --- B8's 85.6\% against B9's 78.9\% for the plotted run, or against 83.2\% for B9's best run --- at the cost of the entire annotation stack (every box, every track, 9 person-action labels, a court-side assignment), a three-stage schedule and a pretrained person backbone, where B9 needs a directory of JPEGs in 8 folders. The ladder wins, and wins on macro F1 as well (0.855 vs.\ 0.846 at B9's best), but it is not the difference between working and not working.
+
+Two caveats belong with these numbers. First, B9 \textbf{overfits hard}: by epoch 98 training loss is 0.0027 while validation loss has climbed to 1.93 from a minimum near 1.21. This is also the most likely explanation for an awkward result --- run 1, which used Ultralytics' \emph{default} random erasing (40\% of frames, up to a third of the frame blanked), scored 83.17\%/0.846, its best, while later runs with erasing dialled down to a player-sized box landed at 78.9--79.7\%. The aggressive occlusion was acting as the regularizer, even though it frequently erased the acting player outright. Second, run 1's weights were overwritten (Ultralytics reuses the run directory), so Table~\ref{tab:b9-metrics} and Fig.~\ref{fig:b9-confusion} report run 3, the checkpoint that still exists.
+
 \section{Next Steps}
 
-(i) \textbf{Clean the B7/B8 ablation} by re-running B7 on the \texttt{run3} backbone, so the $+11.9$ jump is attributed to team-split pooling alone. (ii) \textbf{Reduce overfitting} across all baselines --- stronger augmentation, higher dropout, and earlier stopping remain the levers (B8's fine-tune reaches ${\sim}97\%$ train accuracy against ${\sim}84\%$ validation). (iii) Beyond the ladder, the extension paper's graph/relational models are the natural next step for modeling inter-player structure explicitly rather than via pooling.
+(i) \textbf{Clean the B7/B8 ablation} by re-running B7 on the \texttt{run3} backbone, so the $+11.9$ jump is attributed to team-split pooling alone. (ii) \textbf{Reduce overfitting} across all baselines --- stronger augmentation, higher dropout, and earlier stopping remain the levers (B8's fine-tune reaches ${\sim}97\%$ train accuracy against ${\sim}84\%$ validation). (iii) Beyond the ladder, the extension paper's graph/relational models are the natural next step for modeling inter-player structure explicitly rather than via pooling. (iv) \textbf{Two cheap wins on B9}: it is currently scored per frame while every other baseline is scored per clip, so a majority vote over each clip's frames would make the comparison like-for-like and should raise its number; and since its errors are dominated by a resolution limit (set vs.\ pass at $17\times62$ pixels), retraining at a larger \texttt{imgsz} probes the gap far more cheaply than the annotation pipeline does. (v) B9's own regularization needs a proper sweep rather than the accidental one described above --- the run that generalized best did so by erasing a third of the frame.
 
 %----------------------------------------------------------
 

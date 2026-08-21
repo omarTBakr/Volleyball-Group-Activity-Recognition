@@ -12,6 +12,7 @@ The snapshot shows the output of `uv run python -m src.data.visualize_data` with
 
 - **Dataset**: 55 volleyball videos, 4,830 clips, two annotation levels — 8 group activities (scene-level) and 9 person actions (player-level).
 - **Baselines**: 8 progressively complex models (B1–B8) sharing one data loader, training driver, and evaluator — **all eight complete with results.** B8 (the full hierarchical model + team-split pooling) is the best, and clears the CVPR-2016 paper's 81.9%.
+- **Control experiment**: **B9** throws the whole hierarchy away — one YOLO26-x classifier on the raw frame, no player boxes, no LSTMs, no person labels. It lands within ~7 points of B8 while using *none* of the player annotations, which is the most interesting result in the project: see [B1–B8 vs. B9](#b1b8-vs-b9-what-the-hierarchy-buys).
 - **Stack**: PyTorch + Hydra config + TensorBoard logging; **AdamW** optimizer; shared `Trainer` (one stage per call) and central batch unpackers; multi-GPU via `nn.DataParallel`; Kaggle dual-T4 ready.
 - **Paper**: Ibrahim et al., *A Hierarchical Deep Temporal Model for Group Activity Recognition*, CVPR 2016 (+ journal extension, arXiv:1607.02643).
 - **Full write-up**: [`reports/report.pdf`](reports/report.pdf) — the LaTeX report with per-baseline analysis and confusion-matrix figures.
@@ -27,8 +28,11 @@ The snapshot shows the output of `uv run python -m src.data.visualize_data` with
 | B6 | Pool players per frame → scene LSTM + skip Conv1d | 70.53% | 0.686 | 1.04 |
 | B7 | Hierarchical: player LSTM₁ → pool per frame → scene LSTM₂ (+ skips) | 73.75% | 0.701 | 0.89 |
 | **B8** | **B7 + team-split pooling (per-team, concat)** | **85.64%** | **0.855** | **0.51** |
+| B9 | *Control:* one YOLO26-x classifier on the raw frame — no boxes, no LSTM | 78.86%† | 0.802 | — |
 
 **B8 leads by a wide margin** — team-split pooling adds **+11.9 accuracy / +0.154 macro-F1 over B7** and fixes the left/right confusion that limited every earlier model. Per-baseline architecture, hyperparameters, and analysis: [Baselines & Results](#baselines--results).
+
+† B9 is scored **per frame** (13,370 test frames), the others **per clip** (1,337 test clips), and B9 reports no test loss (a standalone Ultralytics `val()` returns accuracy only). Its best run reached **83.17% / 0.846**; the 78.86% row is the run whose checkpoint and plots are on disk. See [Baseline 9](#baseline-9--one-model-no-player-annotations) for why the comparison is still worth making.
 
 ---
 
@@ -36,6 +40,7 @@ The snapshot shows the output of `uv run python -m src.data.visualize_data` with
 
 - [Quick Start](#quick-start)
 - [Baselines & Results](#baselines--results)
+- [B1–B8 vs. B9 — What the Hierarchy Buys](#b1b8-vs-b9--what-the-hierarchy-buys)
 - [TensorBoard](#tensorboard)
 - [Dataset](#dataset)
 - [Data Pipeline](#data-pipeline)
@@ -93,6 +98,14 @@ uv run python -m models.baseline7   # B7: Hierarchical LSTM₁→pool→LSTM₂ 
 uv run python -m models.baseline8   # B8: B7 + team-split pooling (needs baseline3_stage_a_run2.pt)
 ```
 
+B9 is not Hydra-driven and does not use `VolleyballDataset` — Ultralytics classification wants an ImageFolder tree, so it gets exported first, and the model scale / batch size are **measured** rather than guessed:
+
+```bash
+uv run python -m utils.yolo_export                                     # frames → <DataSet>/yolo_cls/{train,val,test}/<class>/
+uv run python -m utils.yolo_probe --task classify --imgsz 224 --nc 8   # largest scale + batch this GPU can train
+uv run python models/baseline9.py                                      # train (reads the probe report if MODEL/BATCH are blank)
+```
+
 Hyperparameters live in `configs/baseline{1,3,4,5,6,7,8}.yaml` (Hydra). All baselines share `utils/trainer.py` (a `Trainer` that runs one stage per `run_stage` call — staged baselines call it 2–3 times) and the central batch unpackers in `src/data/unpackers.py`; optimizers are **AdamW**. Per-epoch metrics are written to `logs/<baseline>/runN.json` and a TensorBoard event file under `logs/<baseline>/tensorboard/runN/`.
 
 ### 5. Evaluate a Trained Checkpoint
@@ -105,7 +118,10 @@ uv run python -m utils.evaluate --model baseline5_stage_b_run4.pt   --baseline b
 uv run python -m utils.evaluate --model baseline6_stage_b_run2.pt   --baseline baseline6 --batch-size 4
 uv run python -m utils.evaluate --model baseline7_stage_b_run3.pt   --baseline baseline7 --batch-size 4
 uv run python -m utils.evaluate --model baseline8_stage_b_run1.pt   --baseline baseline8 --batch-size 4
+uv run python -m utils.evaluate --model best.pt                     --baseline baseline9
 ```
+
+The `baseline9` target takes a different route through `utils/evaluate.py` — it has no Hydra config, its checkpoint is an Ultralytics classifier, and its data is the exported ImageFolder — but it produces the **same four plots in the same class order**, so B9's confusion matrix is directly comparable to B1–B8's. A bare filename (`best.pt`) is resolved under B9's run directory; pass a full path to plot a different run.
 
 Produces confusion matrix, classification report, precision–recall curves, and mAP under `plots/<baseline>/`. `--device cpu` forces CPU; `--batch-size` overrides the config's batch (B5/B6 clips are 9×~12 crops each, so batch 4 is the 8 GB-GPU sweet spot). The evaluator **auto-detects saved architecture details** (pool mode, LSTM shape, head width, frame count) from the checkpoint's tensor shapes, so legacy checkpoints and post-training YAML edits both load without changes.
 
@@ -504,6 +520,76 @@ The two-phase Stage B again mattered, but note how strong team pooling is on its
 
 </details>
 
+### Baseline 9 — One Model, No Player Annotations
+
+**The control experiment.** Every baseline from B3 onward is built on the paper's premise: group activity is a function of *what the individual players are doing*, so you need boxes, per-player tracks, person-action labels, and a hierarchy to pool them. B9 tests that premise by discarding all of it. One **YOLO26-x classifier** sees the whole 224×224 frame and predicts one of the 8 group activities directly. No detector head, no crops, no `team_ids`, no LSTM, no Stage A — and **not a single player annotation is read**. It is the "just throw a big pretrained model at it" answer, included precisely because it is the honest thing to compare the hierarchy against.
+
+Two pieces of plumbing make it fit the project. `utils/yolo_export.py` rewrites the same annotations into the ImageFolder layout Ultralytics needs (`<root>/<split>/<class>/*.jpg`), honouring the project's video split so the test set is the same 16 videos — and **warps frames to a square** rather than symlinking them, because Ultralytics' `Resize(shortest edge) + CenterCrop` would throw away 44% of the court width, and with 8 classes that come in left/right pairs the court width *is* the label. `utils/yolo_probe.py` walks the scale ladder (x → l → m → s → n) to find the largest architecture the GPU can train, then ladders the batch size for it, and writes a report `models/baseline9.py` reads automatically.
+
+<details>
+<summary><b>Hyperparameters</b> (constants at the top of <code>models/baseline9.py</code> — B9 has no Hydra config)</summary>
+
+| Hyperparameter | Value | Why |
+|---|---|---|
+| Model | `yolo26x-cls.pt` (pretrained) | Largest scale `utils.yolo_probe` fit on the card |
+| Batch / imgsz | 64 / 224 | Probed; 224 matches the exporter's square warp so the center crop is a no-op |
+| Epochs / patience | 100 / 25 | Ultralytics' own early stopping |
+| Optimizer | `auto` (Ultralytics) → AdamW, lr0 0.01, wd 5e-4 | Left at the framework default |
+| `fliplr` / `flipud` | **0.0** / 0.0 | A mirrored frame is a *different class* (`l_set` ↔ `r_set`) — the 0.5 default would relabel half the training set |
+| `scale` | 0.2 | RandomResizedCrop keeps 80–100%; the 0.5 default can crop away the acting side of the court |
+| `erasing` / erase scale | 0.2 / **(0.005, 0.02)** | Ultralytics exposes only the *probability*; torchvision's default box is up to **33% of the frame**, which erased the acting player outright. Capped at one player box (~2% of a 224² frame) by `make_erasing_shrinker()` |
+| Logging | `Trainer.log_epoch` / `record_test` | Ultralytics owns the loop, but the scalars, JSON history and hparams card come out in B1–B8's format |
+
+</details>
+
+#### Test Metrics (run 3 — the checkpoint on disk)
+
+| Metric | Value |
+|--------|-------|
+| Accuracy | **78.86%** |
+| Macro F1 | **0.802** |
+| Top-5 accuracy | 98.86% |
+| Test loss | — (Ultralytics' standalone `val()` reports accuracy only) |
+
+**Analysis — B9 fails in the opposite direction from B1–B7.** The whole B5→B8 storyline was *left/right confusion*: side-blind pooling made `r_winpoint` collapse to 0.08 recall in B5 and 0.38 in B7, and team-split pooling in B8 was the fix. B9 does not have that problem at all. Its **winpoints are its two best classes** (`l_winpoint` **0.90**, `r_winpoint` **0.86**, with only 6–8% cross-side leak), which makes sense: a winpoint is a whole-scene state — players scattered and celebrating — and a full-frame model reads scene layout naturally, without needing to know who did what.
+
+What B9 gets wrong is the **fine-grained action distinction *within* a side**. The five biggest off-diagonal cells are all same-side action swaps: `r_set` → `r-pass` **0.23**, `l_set` → `l-pass` **0.17**, `r-pass` → `r_set` **0.16**, `r_spike` → `r_set` **0.11**, `l-pass` → `l_set` **0.11**. Set and pass differ by one player's arm posture — overhead fingertips vs. forearm platform — and in a 224×224 full frame that player is roughly **17×62 pixels**. The information is simply not resolvable at that scale. Spike, which has a distinctive whole-body silhouette (a jump at the net), survives fine (**0.87 / 0.82**).
+
+That is exactly the trade the hierarchy makes explicit: **player crops buy resolution on the action; team-split pooling buys the side.** B9 gets the side for free from global scene layout and loses the action; B1–B7 got the action from crops and lost the side until B8 fixed it.
+
+> [!warning]
+> **B9 overfits hard.** By epoch 98 training loss is **0.0027** while validation loss has climbed to **1.93** from a minimum near 1.21 — the model memorized 21.5k frames long before it stopped improving. This is why the erasing augmentation matters here, and it is also the most likely reason run 1 (which ran Ultralytics' *default* erasing — 40% of frames, up to a third of the frame blanked) scored **83.17% / 0.846**, its best result, while later runs with the erasing dialled down landed at 78.9–79.7%. The heavy occlusion was acting as the regularizer. Run 1's weights were overwritten (`exist_ok=True` reuses the run directory), so its plots cannot be regenerated — the metrics above are run 3's, which is the checkpoint that still exists.
+
+<details>
+<summary><b>Evaluation plots</b> (run 3)</summary>
+
+| Confusion Matrix | Classification Report |
+|:---:|:---:|
+| ![Confusion Matrix](plots/baseline9/Confusion%20Matrix.png) | ![Classification Report](plots/baseline9/Classification%20Report.png) |
+| **Precision-Recall Curves** | **mAP & F1 per Class** |
+| ![Precision-Recall Curves](plots/baseline9/Precision-Recall%20Curves.png) | ![mAP & F1](plots/baseline9/mAP%20%26%20F1%20Score%20per%20Class.png) |
+
+</details>
+
+---
+
+### B1–B8 vs. B9 — What the Hierarchy Buys
+
+| | B8 (full hierarchy) | B9 (one model) |
+|---|---|---|
+| Test accuracy | **85.64%** (clip-level) | 78.86% frame-level (best run 83.17%) |
+| Macro F1 | **0.855** | 0.802 |
+| Annotations used | boxes + tracks + 9 person actions + team sides | **scene label only** |
+| Pipeline | detect → track → crop → backbone → LSTM₁ → team pool → LSTM₂ → head | resize → classifier |
+| Training stages | 3 (Stage A, Stage B probe, Stage B fine-tune) + a pretrained B3 backbone | 1 |
+| Best classes | winpoint 0.83/0.86, spike 0.93/0.90 | winpoint **0.90/0.86**, spike 0.87/0.82 |
+| Worst failure | *(fixed in B8)* left/right side confusion | set ↔ pass **within** a side (0.17–0.23) |
+| Code | ~500 lines + shared loader/trainer | ~330 lines, one `model.train()` call |
+
+**The honest reading.** B8 wins — by 6.8 points on its best-run comparison, ~2.5 points if you compare B9's best run — and it wins on the metric that matters, macro F1 (0.855 vs 0.846 at best). But it needs the *entire* annotation stack to do it: every player box, every track, 9 person-action labels, and a court-side assignment, plus a three-stage training schedule and a pretrained person backbone. B9 needs a directory of JPEGs sorted into 8 folders.
+
+So the hierarchy is worth roughly **+3 to +7 accuracy points** — real, reproducible, and consistent with the paper's own ablations — but it is not the difference between working and not working, and a project that has only scene labels is not stuck. The more useful conclusion is *where* the gap lives: B9's error budget is dominated by set↔pass confusion that a full-frame model at 224² physically cannot resolve, which says the player crops are earning their keep on **action resolution**, not on scene understanding. A B9 variant at higher `imgsz`, or a clip-level majority vote over its 10 frames per clip (B9 is currently scored on individual frames while every other baseline is scored per clip), would close part of the gap for free — and both are cheaper than the annotation pipeline.
+
 ---
 
 ## TensorBoard
@@ -512,6 +598,12 @@ Every run logs per-epoch loss, accuracy, and macro-F1 to TensorBoard under `logs
 
 ```bash
 uv run tensorboard --logdir logs
+```
+
+B9 is the exception: `OUT_ROOT` in `models/baseline9.py` redirects its checkpoints **and** its logs to the internal SSD (`~/volleyball_out/`), because the repo's external drive returned I/O errors under the 227 MB-per-improving-epoch checkpoint traffic. Point TensorBoard at both, or set `OUT_ROOT = None` to write beside the repo like every other baseline:
+
+```bash
+uv run tensorboard --logdir_spec repo:logs,b9:~/volleyball_out/logs
 ```
 
 The dashboards below overlay the runs across baselines, so the two-stage training is directly comparable — **Stage A** (person-action pretraining, 9 classes) and **Stage B** (group-activity, 8 classes):
@@ -733,14 +825,17 @@ Project1/
 │   ├── baseline5.py             # B5: Per-player LSTM → pooled group head (✅ done)
 │   ├── baseline6.py             # B6: Pooled-scene LSTM + skip Conv1d (✅ done)
 │   ├── baseline7.py             # B7: hierarchical two-LSTM + skips (✅ done — 73.8%)
-│   └── baseline8.py             # B8: B7 + team-split pooling (✅ done — best, 85.6%)
+│   ├── baseline8.py             # B8: B7 + team-split pooling (✅ done — best, 85.6%)
+│   └── baseline9.py             # B9: single YOLO classifier, no annotations (✅ done — 78.9%)
 │
 ├── utils/
 │   ├── utility.py               # Epoch driver + class-weight tools + checkpoint I/O
-│   ├── trainer.py               # Shared Trainer: one training stage per run_stage() call
+│   ├── trainer.py               # Shared Trainer: one stage per run_stage(); log_epoch/record_test are the log sink B9 reuses
 │   ├── featureExtractor.py      # Frozen CNN feature extractor (ImageNet or B1 checkpoint)
-│   ├── evaluate.py              # Post-training evaluation + plots (all baselines)
+│   ├── evaluate.py              # Post-training evaluation + plots (all baselines, incl. B9's YOLO path)
 │   ├── plotting.py              # Confusion matrix, PR curves, mAP
+│   ├── yolo_export.py           # B9: frames → Ultralytics ImageFolder tree (square-warped)
+│   ├── yolo_probe.py            # B9: largest model scale + batch this GPU can train
 │   ├── download_models.py       # Pull trained checkpoints from Google Drive
 │   └── load_model_config.py     # Hydra config → transforms/scheduler builders
 │

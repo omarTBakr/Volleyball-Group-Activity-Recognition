@@ -27,6 +27,7 @@ dependencies = [
     "torchsummary==1.5.1",
     "torchvision==0.24.0",
     "tqdm==4.67.3",
+    "ultralytics>=8.4.123",
     "wrapt>=2.2.1",
 ]
 
