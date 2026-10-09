@@ -48,8 +48,7 @@ B8 (the best model) predicting held-out validation clips in the local FastAPI UI
 - [Inference & API](#inference--api)
 - [TensorBoard](#tensorboard)
 - [Dataset](#dataset)
-- [Data Pipeline](#data-pipeline)
-- [Data Loader API](#data-loader-api)
+- [Data Pipeline & Loader](#data-pipeline--loader)
 - [Project Structure](#project-structure)
 - [References](#references)
 
@@ -678,165 +677,59 @@ A recorded walkthrough of the dashboards is in [TensorBoard demo](#tensorboard-d
 
 ## Dataset
 
-### Class Labels
-
-**8 Group Activities (scene-level)**
-
-| Index | Activity | Index | Activity |
-|-------|----------|-------|----------|
-| 0 | `l-pass` | 4 | `l_set` |
-| 1 | `r-pass` | 5 | `r_set` |
-| 2 | `l-spike` | 6 | `l_winpoint` |
-| 3 | `r_spike` | 7 | `r_winpoint` |
-
-**9 Person Actions (player-level)**
-
-| Index | Action | Index | Action |
-|-------|--------|-------|--------|
-| 0 | `blocking` | 5 | `setting` |
-| 1 | `digging` | 6 | `spiking` |
-| 2 | `falling` | 7 | `standing` |
-| 3 | `jumping` | 8 | `waiting` |
-| 4 | `moving` | | |
-
-### Splits
+55 videos, 4,830 clips (41 frames each, labelled on the middle frame). Splits are defined in `configs/data_split.py`:
 
 | Split | Videos | Clips |
-|-------|--------|-------|
-| **Train** | 24 | 2,152 |
-| **Validation** | 15 | 1,341 |
-| **Test** | 16 | 1,337 |
-| **Total** | 55 | 4,830 |
+|-------|-------:|------:|
+| Train | 24 | 2,152 |
+| Validation | 15 | 1,341 |
+| Test | 16 | 1,337 |
 
-Split definitions live in `configs/data_split.py`.
+- **8 group activities:** `l-pass`, `r-pass`, `l-spike`, `r_spike`, `l_set`, `r_set`, `l_winpoint`, `r_winpoint` (indices 0–7 in that order).
+- **9 person actions:** `blocking`, `digging`, `falling`, `jumping`, `moving`, `setting`, `spiking`, `standing`, `waiting` (indices 0–8).
 
 <details>
 <summary><b>Raw directory layout</b></summary>
 
 ```
 DataSet/
-├── volleyball_/videos/                    # Raw video frames + annotations
-│   ├── 0/                                 # Video 0
-│   │   ├── annotations.txt                # Group activity + person boxes per clip
-│   │   ├── 3596/                          # Clip (middle frame = 3596)
-│   │   │   ├── 3576.jpg                   # 41 frames per clip
-│   │   │   ├── 3577.jpg
-│   │   │   ├── ...
-│   │   │   └── 3616.jpg
-│   │   └── 13286/
-│   │       └── ...
-│   ├── 1/
-│   └── ... (55 videos total, ~4,830 clips)
-│
-├── volleyball-detections/                 # Pre-computed detections
-│   └── {video_id}/{clip_id}/
-│       ├── action_detections.txt          # Tab-separated: frame  N  [x y w h score label] × N
-│       └── person_detections.txt          # Tab-separated: frame  N  [x y w h score label] × N
-│
-├── volleyball_tracking_annotation/        # Player tracking with IDs
-│   └── {video_id}/{clip_id}/
-│       └── {clip_id}.txt                  # Space-separated: id x1 y1 x2 y2 frame f1 f2 f3 action
-│
-├── volleyball_master.json                 # Stage 1+2 unified output
-└── volleyball_master_pickle.pkl           # Fast-load cache
+├── volleyball_/videos/{video_id}/
+│   ├── annotations.txt                    # group activity + person boxes per clip
+│   └── {clip_id}/{frame}.jpg              # 41 frames per clip
+├── volleyball-detections/{video_id}/{clip_id}/
+│   ├── action_detections.txt              # frame  N  [x y w h score label] × N
+│   └── person_detections.txt
+├── volleyball_tracking_annotation/{video_id}/{clip_id}/{clip_id}.txt   # id x1 y1 x2 y2 frame … action
+├── volleyball_master.json                 # parsed + merged annotations
+└── volleyball_master_pickle.pkl           # fast-load cache
 ```
 
 </details>
 
 ---
 
-## Data Pipeline
+## Data Pipeline & Loader
 
-The raw dataset contains three separate annotation sources. The pipeline unifies them in two parsing stages, then caches in two fast-loading formats. End-to-end flow:
+**Preprocessing** (`src/data/json_parser.py`, `pickle_dump.py`; see [Quick Start step 2](#2-prepare-the-dataset-one-time)):
 
-```mermaid
-graph TB
-    subgraph "Raw Dataset (60GB)"
-        A[volleyball-detections/] -->|action_detections.txt<br>person_detections.txt| P
-        B[volleyball_tracking_annotation/] -->|clip_id.txt| P
-        C[volleyball_/videos/] -->|annotations.txt| E
-        C -->|.jpg frames| DL
-    end
+1. Merge the detection and tracking files into one master JSON entry per clip (player boxes, track ids, actions).
+2. Attach each clip's group-activity label from the video's `annotations.txt`.
+3. Cache the metadata as a pickle (~247 MB) and the ~50 GB of frames as a memory-mapped LMDB.
 
-    subgraph "Two-Stage Parsing Pipeline"
-        P["Stage 1: json_parser.py<br>create_master_json()"] -->|volleyball_master.json| D
-        D[Master JSON] --> E["Stage 2: json_parser.py<br>enrich_with_scene_labels()"]
-        E -->|enriched JSON| F["pickle_dump.py<br>dump_to_pickle()"]
-        F -->|volleyball_master_pickle.pkl| G[Fast Pickle Cache]
-    end
-
-    subgraph "PyTorch Data Loading"
-        G -->|load_from_pickle| DL["data_loader.py<br>VolleyballDataset"]
-        DL --> H{Mode?}
-        H -->|full_image=True| I["Full Frames<br>(B1, B4)"]
-        H -->|crop=True| J["Person Crops<br>(B3, B5-B8)"]
-    end
-
-    subgraph "Model Training"
-        I --> M[Baseline Models]
-        J --> M
-        M --> R[Results]
-    end
-```
-
-- **Stage 1 — player-level** (`create_master_json()`): parses `action_detections.txt` / `person_detections.txt` (→ `{box, score, label}`) and `clip_id.txt` tracking (→ `{id, box, flags, action}`) into one master JSON entry per clip.
-- **Stage 2 — scene-level** (`enrich_with_scene_labels()`): reads each video's `annotations.txt` for the group-activity label and attaches it as `scene_class`, keyed **per video** (frame names are unique only within a video).
-- **Caching**: enriched JSON (~1.6 GB) → pickle (~247 MB) for fast metadata; raw `.jpg` frames (~50 GB) → memory-mapped LMDB for fast lazy image loads. Both build scripts are singletons.
-
----
-
-## Data Loader API
-
-`VolleyballDataset` is a **generic** PyTorch `Dataset` that loads from the pickle cache and supports all baselines through constructor flags. All logic lives in a shared base class (`src/data/base_dataset.py`); two thin backends provide the frame storage:
-
-| Import from | Frame storage | Use when |
-|---|---|---|
-| `src.data.data_loader` | LMDB (memory-mapped) | local training, LMDB built |
-| `src.data.kaggle_data_loader` | direct disk reads | Kaggle (no space for LMDB) |
-
-Both expose the identical `VolleyballDataset` / `collate_fn` interface — switching is a one-line import change.
+**Loading.** One generic `VolleyballDataset` serves every baseline through constructor flags (shared logic in `src/data/base_dataset.py`). Import it from `src.data.data_loader` (LMDB) or `src.data.kaggle_data_loader` (direct disk reads, for Kaggle); the interface is identical.
 
 ```python
 from src.data.data_loader import VolleyballDataset, collate_fn
 
-# B1: Full image, middle frame only → (image, group_label)
-ds = VolleyballDataset(mode="train", n_frames=1, full_image=True, transform=transform)
-
-# B3: Cropped persons, middle frame → (crops [P,C,H,W], person_labels [P], group_label)
-ds = VolleyballDataset(mode="train", n_frames=1, crop=True, transform=transform)
-
-# B4: Full image, 9-frame sequence → (images [9,C,H,W], group_label)
-ds = VolleyballDataset(mode="train", n_frames=9, full_image=True, transform=transform)
-
-# B5-B8: Cropped persons, 9-frame sequence → (crops [9,P,C,H,W], person_labels [P], group_label)
-ds = VolleyballDataset(mode="train", n_frames=9, crop=True, transform=transform)
+VolleyballDataset(mode="train", n_frames=1, full_image=True)   # B1:    image → group label
+VolleyballDataset(mode="train", n_frames=1, crop=True)         # B3:    player crops [P,C,H,W]
+VolleyballDataset(mode="train", n_frames=9, full_image=True)   # B4:    9 frames [9,C,H,W]
+VolleyballDataset(mode="train", n_frames=9, crop=True)         # B5–B8: 9 frames of crops [9,P,C,H,W]
 ```
 
-### Collate Function
-
-`collate_fn` handles **variable player counts** across clips by padding the player dimension to the batch maximum and returning a boolean mask:
-
-```python
-loader = DataLoader(dataset, batch_size=8, collate_fn=collate_fn)
-# Crop mode returns:               (crops, person_labels, group_labels, masks)
-# Crop mode with with_teams=True:  (crops, person_labels, group_labels, masks, team_ids)
-```
-
-**Team mode** (`VolleyballDataset(..., with_teams=True)`) is opt-in and fully backward-compatible: the first four elements are unchanged, and a 5th `team_ids` tensor `(B, P)` is appended — `0` = left court side, `1` = right, `-1` for padded slots, aligned with the mask. Team membership is derived once per clip from box center-x ordering (the paper's split), so it coexists with the track-ID player ordering the temporal LSTMs require. B8 is the only consumer.
-
-### Batch Unpackers
-
-An *unpacker* turns a collated batch into `(model_inputs, target)` for the shared epoch driver (`model(*inputs)`). Unpacking happens **after** collate (it reshapes the batched, padded tensors), so it lives in `src/data/unpackers.py`, not the dataset. The canonical set, selectable by name via `get_unpacker(task)`:
-
-| task | contract | used by |
-|---|---|---|
-| `person_frame` | single-frame crops → `((crops,), labels)` | B3 Stage A |
-| `person_seq` | temporal → `((seqs,), labels)` | B5 Stage A |
-| `person_track` | temporal → `((P=1 tracks, masks), labels)` | B6/B7/B8 Stage A |
-| `group_crop` | `((crops, masks), group)` | B3/B5/B6/B7 Stage B |
-| `group_team` | `((crops, masks, team_ids), group)` | B8 Stage B |
-
-Adding a new baseline = one model class + pick the matching unpacker; no changes to the loader or the training loop.
+- **`collate_fn`** pads clips to the batch's largest player count and returns a mask: `(crops, person_labels, group_labels, masks)`.
+- **`with_teams=True`** (B8) appends `team_ids` `(B, P)`: 0 = left side, 1 = right, -1 = padding, split by box centre-x.
+- **Unpackers** (`src/data/unpackers.py`, `get_unpacker(task)`) turn a batch into `(model_inputs, target)` for the shared trainer: `person_frame` (B3 A), `person_seq` (B5 A), `person_track` (B6–B8 A), `group_crop` (B3/B5–B7 B), `group_team` (B8 B). A new baseline needs only a model class and an unpacker.
 
 ---
 
