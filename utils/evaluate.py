@@ -24,7 +24,7 @@ import torch
 import torch.nn.functional as F
 from hydra import compose, initialize_config_dir
 from omegaconf import DictConfig
-from sklearn.metrics import confusion_matrix
+from sklearn.metrics import confusion_matrix, f1_score
 from torch import nn
 from torch.utils.data import DataLoader
 from tqdm import tqdm
@@ -711,13 +711,73 @@ def _resolve_yolo_weights(model_filename: str) -> Path:
     return candidate
 
 
+def _aggregate_by_clip(
+    paths: list[str],
+    y_true: np.ndarray,
+    y_score: np.ndarray,
+    *,
+    method: str = "mean",
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Collapse per-frame B9 predictions into one prediction per clip.
+
+    The exported frames are named ``<video>_<clip>_<frame>.jpg``, so the
+    first two underscore-separated fields identify the clip. All frames of
+    a clip share one label, which makes this scoring directly comparable
+    to B1-B8 (which predict once per clip).
+
+    Parameters
+    ----------
+    paths : list[str]
+        Frame file paths, aligned row-for-row with ``y_true``/``y_score``.
+    y_true : np.ndarray
+        Per-frame labels, shape ``(N,)``.
+    y_score : np.ndarray
+        Per-frame softmax scores, shape ``(N, C)``.
+    method : {"mean", "vote"}
+        ``"mean"`` averages the softmax over the clip's frames;
+        ``"vote"`` takes the majority class (ties go to the lower index),
+        and its returned scores are the vote fractions.
+
+    Returns
+    -------
+    (y_true, y_pred, y_score)
+        Clip-level arrays, one row per clip, in sorted clip-key order.
+    """
+    if method not in ("mean", "vote"):
+        raise ValueError(f"method must be 'mean' or 'vote', got {method!r}")
+
+    keys = np.array(["_".join(Path(p).stem.split("_")[:2]) for p in paths])
+    num_classes = y_score.shape[1]
+
+    clip_true, clip_score = [], []
+    for key in np.unique(keys):
+        rows = np.flatnonzero(keys == key)
+        labels = np.unique(y_true[rows])
+        if len(labels) != 1:
+            raise ValueError(f"Clip {key} has mixed labels {labels.tolist()}")
+        clip_true.append(labels[0])
+        if method == "mean":
+            clip_score.append(y_score[rows].mean(axis=0))
+        else:
+            votes = np.bincount(y_score[rows].argmax(axis=1), minlength=num_classes)
+            clip_score.append(votes / len(rows))
+
+    clip_score = np.stack(clip_score)
+    return np.array(clip_true), clip_score.argmax(axis=1), clip_score
+
+
 def _yolo_cls_inference(
     weights: Path,
     device: torch.device,
     *,
     batch_size: int,
+    clip_level: str | None = None,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Run B9's YOLO classifier over the exported test split.
+
+    ``clip_level`` (``"mean"`` or ``"vote"``) aggregates the per-frame
+    predictions into one per clip via :func:`_aggregate_by_clip`; ``None``
+    keeps the per-frame contract.
 
     Returns
     -------
@@ -774,11 +834,16 @@ def _yolo_cls_inference(
             y_pred_all.append(remap[probs.argmax(axis=1)])
             y_score_all.append(probs[:, column_order])
 
-    return (
-        np.concatenate(y_true_all),
-        np.concatenate(y_pred_all),
-        np.concatenate(y_score_all),
-    )
+    y_true_f = np.concatenate(y_true_all)
+    y_pred_f = np.concatenate(y_pred_all)
+    y_score_f = np.concatenate(y_score_all)
+
+    if clip_level is None:
+        return y_true_f, y_pred_f, y_score_f
+
+    # shuffle=False, so dataset.samples is row-aligned with the arrays above.
+    paths = [sample[0] for sample in dataset.samples]
+    return _aggregate_by_clip(paths, y_true_f, y_score_f, method=clip_level)
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -820,6 +885,7 @@ def evaluate(
     baseline_name: str,
     device: str = "cuda",
     batch_size: int | None = None,
+    clip_level: str | None = None,
 ) -> None:
     """Evaluate a saved checkpoint and generate all metric plots.
 
@@ -838,6 +904,10 @@ def evaluate(
     batch_size : int or None
         Test-loader batch size; ``None`` (default) uses the baseline
         config's value. Lower it when eval OOMs on the available GPU.
+    clip_level : {"mean", "vote"} or None
+        B9 only. Aggregate its per-frame predictions to one per clip (mean
+        softmax or majority vote) so it is scored like B1-B8. Plots go to
+        ``plots/baseline9_clip_<method>/``; ``None`` keeps per-frame scoring.
     """
     device = get_device(device)
 
@@ -845,10 +915,27 @@ def evaluate(
     # build — only the plots are shared, so it branches out before all three.
     if baseline_name == "baseline9":
         y_true, y_pred, y_score = _yolo_cls_inference(
-            _resolve_yolo_weights(model_filename), device, batch_size=batch_size or 64,
+            _resolve_yolo_weights(model_filename),
+            device,
+            batch_size=batch_size or 64,
+            clip_level=clip_level,
         )
-        _generate_plots(y_true, y_pred, y_score, CLASS_NAMES, baseline_name)
-        print(f"\n✓ Done! All plots saved to 'plots/{baseline_name}/'.")
+        out_name = baseline_name if clip_level is None else f"{baseline_name}_clip_{clip_level}"
+        if clip_level is not None:
+            acc = float((y_true == y_pred).mean())
+            f1 = f1_score(y_true, y_pred, average="macro")
+            # NLL of the averaged probability — NOT comparable to B1-B8's
+            # cross-entropy, so it is shown only for "mean" and labelled.
+            nll = (
+                float(-np.log(np.clip(y_score[np.arange(len(y_true)), y_true], 1e-12, None)).mean())
+                if clip_level == "mean" else float("nan")
+            )
+            print(
+                f"\nClip-level ({clip_level}) over {len(y_true)} clips: "
+                f"acc={acc:.4f}  macro-F1={f1:.4f}  mean-prob NLL={nll:.4f}"
+            )
+        _generate_plots(y_true, y_pred, y_score, CLASS_NAMES, out_name)
+        print(f"\n✓ Done! All plots saved to 'plots/{out_name}/'.")
         return
 
     # ── Config ────────────────────────────────────────────────────────
@@ -919,6 +1006,20 @@ if __name__ == "__main__":
         help="Test-loader batch size (default: the baseline config's value). "
              "Lower it if evaluation runs out of GPU memory.",
     )
+    parser.add_argument(
+        "--clip-level",
+        type=str,
+        default=None,
+        choices=["mean", "vote"],
+        help="baseline9 only: aggregate per-frame predictions to one per clip "
+             "(mean softmax or majority vote) to match B1-B8's scoring.",
+    )
     args = parser.parse_args()
 
-    evaluate(args.model, args.baseline, device=args.device, batch_size=args.batch_size)
+    evaluate(
+        args.model,
+        args.baseline,
+        device=args.device,
+        batch_size=args.batch_size,
+        clip_level=args.clip_level,
+    )
