@@ -28,11 +28,14 @@ The snapshot shows the output of `uv run python -m src.data.visualize_data` with
 | B6 | Pool players per frame → scene LSTM + skip Conv1d | 70.53% | 0.686 | 1.04 |
 | B7 | Hierarchical: player LSTM₁ → pool per frame → scene LSTM₂ (+ skips) | 73.75% | 0.701 | 0.89 |
 | **B8** | **B7 + team-split pooling (per-team, concat)** | **85.64%** | **0.855** | **0.51** |
-| B9 | *Control:* one YOLO26-x classifier on the raw frame — no boxes, no LSTM | 78.86%† | 0.802 | — |
+| B9 (per frame) | *Control:* one YOLO26-x classifier on the raw frame — no boxes, no LSTM | 78.86%† | 0.802 | — |
+| B9 (per clip) | Same checkpoint, 10 frames per clip combined by majority vote‡ | 80.33% | 0.817 | — |
 
 **B8 leads by a wide margin** — team-split pooling adds **+11.9 accuracy / +0.154 macro-F1 over B7** and fixes the left/right confusion that limited every earlier model. Per-baseline architecture, hyperparameters, and analysis: [Baselines & Results](#baselines--results).
 
 † B9 is scored **per frame** (13,370 test frames), the others **per clip** (1,337 test clips), and B9 reports no test loss (a standalone Ultralytics `val()` returns accuracy only). Its best run reached **83.17% / 0.846**; the 78.86% row is the run whose checkpoint and plots are on disk. See [Baseline 9](#baseline-9--one-model-no-player-annotations) for why the comparison is still worth making.
+
+‡ The same run-3 checkpoint re-scored per clip with `--clip-level` (1,337 clips, same unit as B1–B8): majority vote **80.33% / 0.817**, mean-softmax **80.18% / 0.816**. No retraining; plots in `plots/baseline9_clip_vote/` and `plots/baseline9_clip_mean/`. The clip-level row is the like-for-like comparison with B8. Test loss is still unavailable: the mean-probability NLL (1.47) is not comparable to the other baselines' cross-entropy.
 
 ---
 
@@ -41,6 +44,7 @@ The snapshot shows the output of `uv run python -m src.data.visualize_data` with
 - [Quick Start](#quick-start)
 - [Baselines & Results](#baselines--results)
 - [B1–B8 vs. B9 — What the Hierarchy Buys](#b1b8-vs-b9--what-the-hierarchy-buys)
+- [Inference & API](#inference--api)
 - [TensorBoard](#tensorboard)
 - [Dataset](#dataset)
 - [Data Pipeline](#data-pipeline)
@@ -119,6 +123,7 @@ uv run python -m utils.evaluate --model baseline6_stage_b_run2.pt   --baseline b
 uv run python -m utils.evaluate --model baseline7_stage_b_run3.pt   --baseline baseline7 --batch-size 4
 uv run python -m utils.evaluate --model baseline8_stage_b_run1.pt   --baseline baseline8 --batch-size 4
 uv run python -m utils.evaluate --model best.pt                     --baseline baseline9
+uv run python -m utils.evaluate --model best.pt --baseline baseline9 --clip-level vote   # per-clip scoring (or: mean)
 ```
 
 The `baseline9` target takes a different route through `utils/evaluate.py` — it has no Hydra config, its checkpoint is an Ultralytics classifier, and its data is the exported ImageFolder — but it produces the **same four plots in the same class order**, so B9's confusion matrix is directly comparable to B1–B8's. A bare filename (`best.pt`) is resolved under B9's run directory; pass a full path to plot a different run.
@@ -588,7 +593,44 @@ That is exactly the trade the hierarchy makes explicit: **player crops buy resol
 
 **The honest reading.** B8 wins — by 6.8 points on its best-run comparison, ~2.5 points if you compare B9's best run — and it wins on the metric that matters, macro F1 (0.855 vs 0.846 at best). But it needs the *entire* annotation stack to do it: every player box, every track, 9 person-action labels, and a court-side assignment, plus a three-stage training schedule and a pretrained person backbone. B9 needs a directory of JPEGs sorted into 8 folders.
 
-So the hierarchy is worth roughly **+3 to +7 accuracy points** — real, reproducible, and consistent with the paper's own ablations — but it is not the difference between working and not working, and a project that has only scene labels is not stuck. The more useful conclusion is *where* the gap lives: B9's error budget is dominated by set↔pass confusion that a full-frame model at 224² physically cannot resolve, which says the player crops are earning their keep on **action resolution**, not on scene understanding. A B9 variant at higher `imgsz`, or a clip-level majority vote over its 10 frames per clip (B9 is currently scored on individual frames while every other baseline is scored per clip), would close part of the gap for free — and both are cheaper than the annotation pipeline.
+So the hierarchy is worth roughly **+3 to +7 accuracy points** — real, reproducible, and consistent with the paper's own ablations — but it is not the difference between working and not working, and a project that has only scene labels is not stuck. The more useful conclusion is *where* the gap lives: B9's error budget is dominated by set↔pass confusion that a full-frame model at 224² physically cannot resolve, which says the player crops are earning their keep on **action resolution**, not on scene understanding. A B9 variant at higher `imgsz`, would close part of the gap — and both are cheaper than the annotation pipeline. A clip-level majority vote over its 10 frames per clip (now implemented as `--clip-level`) was the free fix, and it turned out to be small: **78.86% → 80.33%**, so against B8's 85.64% the like-for-like gap is **~5.3 points**, not the ~7 the per-frame number suggested.
+
+---
+
+## Inference & API
+
+B8 can be served locally. It needs **tracked player boxes**, so the service runs on clips from the dataset's validation split (boxes included) instead of arbitrary uploaded video.
+
+```bash
+uv run uvicorn src.api.main:app --port 8000     # then open http://localhost:8000/docs
+curl "localhost:8000/predict/random-validation?seed=3"                       # JSON: prediction, 8 probabilities, per-frame player boxes
+curl "localhost:8000/predict/random-validation/video?seed=3" -o clip.gif     # boxes coloured by team + predicted vs. true label
+curl -X POST localhost:8000/predict/clip -H 'content-type: application/json' \
+     -d '{"video_id": "24", "clip_id": "12585"}'                             # a specific validation clip
+```
+
+| Piece | File |
+|-------|------|
+| Load B8 from a checkpoint (architecture read from tensor shapes, no Hydra) | `src/inference/b8.py` |
+| Pick / load a validation clip, with raw frames and boxes | `src/inference/sample.py` |
+| Draw boxes + prediction, write GIF/MP4 | `src/inference/render.py` |
+| FastAPI app | `src/api/main.py` |
+| Preprocessing sanity check | `uv run python -m src.inference.check --n 200` |
+
+The checkpoint is `saved_models/baseline8_stage_b_run1.pt` (override with `VB_B8_CKPT`). `src.inference.check` scores random validation clips as a wiring check — it measured **82.0% on 200 clips**, consistent with the reported test numbers but **not** a replacement for them; the results tables above remain the test split. `uv run pytest tests` runs the API and aggregation tests.
+
+### Hugging Face
+
+| What | Where |
+|------|-------|
+| Weights + model card (B8) | [`OmarTBakr/volleyball-activity-b8`](https://huggingface.co/OmarTBakr/volleyball-activity-b8) |
+| Demo Space (static) | [`OmarTBakr/volleyball-activity-demo`](https://huggingface.co/spaces/OmarTBakr/volleyball-activity-demo) |
+
+Both repos are currently **private** until they are made public. The Space is **static**: it shows B8's *precomputed* predictions on 20 held-out validation clips (2 per activity plus 4 random, fixed seed, not chosen by outcome) rather than running the model, because Gradio Spaces on free CPU need a Hugging Face PRO subscription. Twenty clips illustrate the model; they are not an accuracy estimate (the test split is the reference: 85.64%).
+
+- `space_static/` — the published page; regenerate with `uv run python space/build_static.py`.
+- `space/` — a live Gradio version (`app.py`, standalone `b8_model.py`, the 20-clip bundle from `space.build_bundle`). Its probabilities match the repo pipeline exactly on all 20 clips; deploy it as a Gradio Space if you have PRO, or run `python space/app.py` after `pip install gradio`.
+- The Hugging Face token lives in `.env` (`HF_TOKEN`, see `.env.example`); `.env` is gitignored.
 
 ---
 

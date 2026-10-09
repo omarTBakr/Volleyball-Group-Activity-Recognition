@@ -299,16 +299,16 @@ Two pieces of plumbing make it fit the project. \texttt{utils/yolo\_export.py} r
 
 \begin{table}[h]
     \centering
-    \caption{Baseline 9 test-set metrics (run 3, the checkpoint on disk). Scored per frame over 13{,}370 test frames; B1--B8 are scored per clip over 1{,}337 clips.}
+    \caption{Baseline 9 test-set metrics (run 3, the checkpoint on disk). The per-frame column scores 13{,}370 test frames; the per-clip columns re-score the same checkpoint over 1{,}337 clips, the unit B1--B8 use, by combining each clip's 10 frames (mean softmax or majority vote). No retraining was involved.}
     \label{tab:b9-metrics}
-    \begin{tabular}{lc}
+    \begin{tabular}{lccc}
         \toprule
-        \textbf{Metric} & \textbf{Value} \\
+        \textbf{Metric} & \textbf{Per frame} & \textbf{Per clip (mean)} & \textbf{Per clip (vote)} \\
         \midrule
-        Accuracy        & \textbf{78.86\%} \\
-        Macro F1        & \textbf{0.802} \\
-        Top-5 accuracy  & 98.86\% \\
-        Test Loss       & --- \\
+        Accuracy        & \textbf{78.86\%} & 80.18\% & \textbf{80.33\%} \\
+        Macro F1        & \textbf{0.802}   & 0.816   & \textbf{0.817} \\
+        Top-5 accuracy  & 98.86\%          & ---     & --- \\
+        Test Loss       & ---              & ---     & --- \\
         \bottomrule
     \end{tabular}
 \end{table}
@@ -322,13 +322,17 @@ Two pieces of plumbing make it fit the project. \texttt{utils/yolo\_export.py} r
     \label{fig:b9-confusion}
 \end{figure}
 
-This is precisely the trade the hierarchy makes explicit: \textbf{player crops buy resolution on the action; team-split pooling buys the side.} B9 gets the side for free from global scene layout and loses the action; B1--B7 got the action from crops and lost the side until B8 restored it. Quantitatively the hierarchy is worth roughly $+3$ to $+7$ accuracy points --- B8's 85.6\% against B9's 78.9\% for the plotted run, or against 83.2\% for B9's best run --- at the cost of the entire annotation stack (every box, every track, 9 person-action labels, a court-side assignment), a three-stage schedule and a pretrained person backbone, where B9 needs a directory of JPEGs in 8 folders. The ladder wins, and wins on macro F1 as well (0.855 vs.\ 0.846 at B9's best), but it is not the difference between working and not working.
+This is precisely the trade the hierarchy makes explicit: \textbf{player crops buy resolution on the action; team-split pooling buys the side.} B9 gets the side for free from global scene layout and loses the action; B1--B7 got the action from crops and lost the side until B8 restored it. Quantitatively the hierarchy is worth roughly $+3$ to $+7$ accuracy points --- B8's 85.6\% against B9's 78.9\% per frame for the plotted run, 80.3\% when that same run is scored per clip like-for-like (a gap of 5.3 points), or 83.2\% for B9's best run --- at the cost of the entire annotation stack (every box, every track, 9 person-action labels, a court-side assignment), a three-stage schedule and a pretrained person backbone, where B9 needs a directory of JPEGs in 8 folders. The ladder wins, and wins on macro F1 as well (0.855 vs.\ 0.846 at B9's best), but it is not the difference between working and not working.
 
 Two caveats belong with these numbers. First, B9 \textbf{overfits hard}: by epoch 98 training loss is 0.0027 while validation loss has climbed to 1.93 from a minimum near 1.21. This is also the most likely explanation for an awkward result --- run 1, which used Ultralytics' \emph{default} random erasing (40\% of frames, up to a third of the frame blanked), scored 83.17\%/0.846, its best, while later runs with erasing dialled down to a player-sized box landed at 78.9--79.7\%. The aggressive occlusion was acting as the regularizer, even though it frequently erased the acting player outright. Second, run 1's weights were overwritten (Ultralytics reuses the run directory), so Table~\ref{tab:b9-metrics} and Fig.~\ref{fig:b9-confusion} report run 3, the checkpoint that still exists.
 
+\section{Inference and Local Deployment}
+
+Baseline 8 is exposed through a small FastAPI service (\texttt{src/api/main.py}) built on a shared inference package (\texttt{src/inference/}). The model is rebuilt from the checkpoint's tensor shapes, so no training configuration is needed at serving time. Because B8 consumes tracked player boxes, the service predicts clips from the dataset's validation split rather than arbitrary video: \texttt{/predict/random-validation} returns the predicted activity, the eight class probabilities and the per-frame player boxes, and a companion endpoint returns an annotated GIF with boxes coloured by team beside the predicted and true labels. As a wiring check, the pipeline scored 82.0\% on 200 random validation clips, consistent with the test-split result above; the reported results themselves are unchanged. Nine automated tests cover the B9 clip aggregation and the API endpoints. The weights and a model card are published on Hugging Face (\texttt{OmarTBakr/volleyball-activity-b8}), together with a static demo Space that displays B8's precomputed predictions on 20 held-out validation clips; a live Gradio Space was not used because free CPU Gradio hosting requires a paid subscription. The 20 clips (two per activity plus four chosen at random with a fixed seed) illustrate the model and are not an accuracy estimate; the test-split result above remains the reference.
+
 \section{Next Steps}
 
-(i) \textbf{Clean the B7/B8 ablation} by re-running B7 on the \texttt{run3} backbone, so the $+11.9$ jump is attributed to team-split pooling alone. (ii) \textbf{Reduce overfitting} across all baselines --- stronger augmentation, higher dropout, and earlier stopping remain the levers (B8's fine-tune reaches ${\sim}97\%$ train accuracy against ${\sim}84\%$ validation). (iii) Beyond the ladder, the extension paper's graph/relational models are the natural next step for modeling inter-player structure explicitly rather than via pooling. (iv) \textbf{Two cheap wins on B9}: it is currently scored per frame while every other baseline is scored per clip, so a majority vote over each clip's frames would make the comparison like-for-like and should raise its number; and since its errors are dominated by a resolution limit (set vs.\ pass at $17\times62$ pixels), retraining at a larger \texttt{imgsz} probes the gap far more cheaply than the annotation pipeline does. (v) B9's own regularization needs a proper sweep rather than the accidental one described above --- the run that generalized best did so by erasing a third of the frame.
+(i) \textbf{Clean the B7/B8 ablation} by re-running B7 on the \texttt{run3} backbone, so the $+11.9$ jump is attributed to team-split pooling alone. (ii) \textbf{Reduce overfitting} across all baselines --- stronger augmentation, higher dropout, and earlier stopping remain the levers (B8's fine-tune reaches ${\sim}97\%$ train accuracy against ${\sim}84\%$ validation). (iii) Beyond the ladder, the extension paper's graph/relational models are the natural next step for modeling inter-player structure explicitly rather than via pooling. (iv) \textbf{Cheap wins on B9}: the per-clip re-scoring (mean softmax or majority vote over each clip's 10 frames, \texttt{--clip-level} in \texttt{utils/evaluate.py}) is now done and made the comparison like-for-like, but it raised accuracy only from 78.9\% to 80.3\%, so most of the gap is not a frame-noise problem; since the errors are dominated by a resolution limit (set vs.\ pass at $17\times62$ pixels), retraining at a larger \texttt{imgsz} probes the gap far more cheaply than the annotation pipeline does. (v) B9's own regularization needs a proper sweep rather than the accidental one described above --- the run that generalized best did so by erasing a third of the frame.
 
 %----------------------------------------------------------
 
