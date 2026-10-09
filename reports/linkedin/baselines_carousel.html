@@ -1,0 +1,206 @@
+<!doctype html><html><head><meta charset="utf-8"><title>Volleyball Baselines B1–B9</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Oswald:wght@400..700&family=IBM+Plex+Sans:wght@400;600&display=swap">
+<style>
+@page { size: 1920px 1080px; margin: 0 }
+html,body { margin:0; padding:0; background:#F6F4EF }
+*,*::before,*::after { box-sizing:border-box }
+section { width:1920px; height:1080px; overflow:hidden; position:relative; page-break-after:always; break-after:page }
+h1,h2,h3,p,ul,ol { margin:0 }
+aside { display:none }
+x-shape { display:block; flex:none }
+x-shape[kind=arrow-right] { clip-path:polygon(0 30%,60% 30%,60% 0,100% 50%,60% 100%,60% 70%,0 70%) }
+</style></head><body>
+<section id="b1-b4" data-transition="push" style="background:#F6F4EF;color:#1B2333;font-family:'IBM Plex Sans', Arial, sans-serif;padding:72px 96px;display:flex;flex-direction:column;gap:28px">
+<div style="display:flex;flex-direction:row;align-items:end;justify-content:space-between;gap:32px">
+<div style="display:flex;flex-direction:column;gap:8px">
+<p style="font-size:24px;letter-spacing:3px;text-transform:uppercase;font-weight:600;color:#A8431A">Volleyball group activity recognition · 1 / 3</p>
+<h2 style="font-family:'Oswald', Arial, sans-serif;font-size:60px;font-weight:600;line-height:1.1;color:#1B2333">From one frame to players and time</h2>
+</div>
+<p style="font-size:24px;color:#4A5263;text-align:right">Test accuracy, 1,337 held-out clips<br><span style="color:#A8431A">Highlighted = new in this step</span></p>
+</div>
+<div style="flex:1;display:flex;flex-direction:row;align-items:center;gap:40px;background:#FFFEFB;border:1px solid #E4E0D6;border-radius:20px;padding:24px 32px">
+<div style="width:500px;display:flex;flex-direction:column;gap:8px">
+<div style="display:flex;flex-direction:row;align-items:center;justify-content:space-between;gap:16px">
+<h3 style="font-family:'Oswald', Arial, sans-serif;font-size:40px;font-weight:500;line-height:1.2;color:#1B2333">B1 · Single frame</h3>
+<p style="font-size:26px;font-weight:600;color:#A8431A;background:#FCE3D4;padding:4px 16px;border-radius:999px">62.6%</p>
+</div>
+<p style="font-size:24px;line-height:1.35;color:#4A5263">One middle frame, no players, no time. The floor every later model has to beat.</p>
+</div>
+<div style="flex:1;display:flex;flex-direction:row;align-items:center;gap:10px">
+<p style="font-size:24px;line-height:1.25;text-align:center;white-space:nowrap;background:#EDF0F4;padding:10px 14px;border-radius:12px">Middle<br>frame</p>
+<x-shape kind="arrow-right" style="width:28px;height:16px;background:#9AA3B2"></x-shape>
+<p style="font-size:24px;line-height:1.25;text-align:center;white-space:nowrap;background:#FCE3D4;border:2px solid #C9531F;padding:10px 14px;border-radius:12px">ResNet-50<br>fine-tuned</p>
+<x-shape kind="arrow-right" style="width:28px;height:16px;background:#9AA3B2"></x-shape>
+<p style="font-size:24px;line-height:1.25;text-align:center;white-space:nowrap;background:#EDF0F4;padding:10px 14px;border-radius:12px">MLP → 8<br>activities</p>
+</div>
+</div>
+<div style="flex:1;display:flex;flex-direction:row;align-items:center;gap:40px;background:#FFFEFB;border:1px solid #E4E0D6;border-radius:20px;padding:24px 32px">
+<div style="width:500px;display:flex;flex-direction:column;gap:8px">
+<div style="display:flex;flex-direction:row;align-items:center;justify-content:space-between;gap:16px">
+<h3 style="font-family:'Oswald', Arial, sans-serif;font-size:40px;font-weight:500;line-height:1.2;color:#1B2333">B3 · Player crops</h3>
+<p style="font-size:26px;font-weight:600;color:#A8431A;background:#FCE3D4;padding:4px 16px;border-radius:999px">60.7%</p>
+</div>
+<p style="font-size:24px;line-height:1.35;color:#4A5263">Adds players: a ResNet trained on the 9 player actions, pooled across everyone on court. No time yet.</p>
+</div>
+<div style="flex:1;display:flex;flex-direction:row;align-items:center;gap:10px">
+<p style="font-size:24px;line-height:1.25;text-align:center;white-space:nowrap;background:#FCE3D4;border:2px solid #C9531F;padding:10px 14px;border-radius:12px">Player<br>crops</p>
+<x-shape kind="arrow-right" style="width:28px;height:16px;background:#9AA3B2"></x-shape>
+<p style="font-size:24px;line-height:1.25;text-align:center;white-space:nowrap;background:#EDF0F4;padding:10px 14px;border-radius:12px">ResNet-50<br>frozen</p>
+<x-shape kind="arrow-right" style="width:28px;height:16px;background:#9AA3B2"></x-shape>
+<p style="font-size:24px;line-height:1.25;text-align:center;white-space:nowrap;background:#EDF0F4;padding:10px 14px;border-radius:12px">Max + mean<br>pool</p>
+<x-shape kind="arrow-right" style="width:28px;height:16px;background:#9AA3B2"></x-shape>
+<p style="font-size:24px;line-height:1.25;text-align:center;white-space:nowrap;background:#EDF0F4;padding:10px 14px;border-radius:12px">MLP → 8<br>activities</p>
+</div>
+</div>
+<div style="flex:1;display:flex;flex-direction:row;align-items:center;gap:40px;background:#FFFEFB;border:1px solid #E4E0D6;border-radius:20px;padding:24px 32px">
+<div style="width:500px;display:flex;flex-direction:column;gap:8px">
+<div style="display:flex;flex-direction:row;align-items:center;justify-content:space-between;gap:16px">
+<h3 style="font-family:'Oswald', Arial, sans-serif;font-size:40px;font-weight:500;line-height:1.2;color:#1B2333">B4 · Frames over time</h3>
+<p style="font-size:26px;font-weight:600;color:#A8431A;background:#FCE3D4;padding:4px 16px;border-radius:999px">66.1%</p>
+</div>
+<p style="font-size:24px;line-height:1.35;color:#4A5263">Adds time instead: features from all 9 frames run through an LSTM. No players.</p>
+</div>
+<div style="flex:1;display:flex;flex-direction:row;align-items:center;gap:10px">
+<p style="font-size:24px;line-height:1.25;text-align:center;white-space:nowrap;background:#EDF0F4;padding:10px 14px;border-radius:12px">9 full<br>frames</p>
+<x-shape kind="arrow-right" style="width:28px;height:16px;background:#9AA3B2"></x-shape>
+<p style="font-size:24px;line-height:1.25;text-align:center;white-space:nowrap;background:#EDF0F4;padding:10px 14px;border-radius:12px">B1 ResNet<br>frozen</p>
+<x-shape kind="arrow-right" style="width:28px;height:16px;background:#9AA3B2"></x-shape>
+<p style="font-size:24px;line-height:1.25;text-align:center;white-space:nowrap;background:#FCE3D4;border:2px solid #C9531F;padding:10px 14px;border-radius:12px">LSTM<br>over time</p>
+<x-shape kind="arrow-right" style="width:28px;height:16px;background:#9AA3B2"></x-shape>
+<p style="font-size:24px;line-height:1.25;text-align:center;white-space:nowrap;background:#EDF0F4;padding:10px 14px;border-radius:12px">MLP → 8<br>activities</p>
+</div>
+</div>
+<aside>B2 does not exist in this project; the ladder goes B1, B3, B4. Each row adds one idea, highlighted in orange in its diagram.</aside>
+</section>
+
+<section id="b5-b7" data-transition="push" style="background:#F6F4EF;color:#1B2333;font-family:'IBM Plex Sans', Arial, sans-serif;padding:72px 96px;display:flex;flex-direction:column;gap:28px">
+<div style="display:flex;flex-direction:row;align-items:end;justify-content:space-between;gap:32px">
+<div style="display:flex;flex-direction:column;gap:8px">
+<p style="font-size:24px;letter-spacing:3px;text-transform:uppercase;font-weight:600;color:#A8431A">Volleyball group activity recognition · 2 / 3</p>
+<h2 style="font-family:'Oswald', Arial, sans-serif;font-size:60px;font-weight:600;line-height:1.1;color:#1B2333">Players over time, then the full hierarchy</h2>
+</div>
+<p style="font-size:24px;color:#4A5263;text-align:right">Test accuracy, 1,337 held-out clips<br><span style="color:#A8431A">Highlighted = new in this step</span></p>
+</div>
+<div style="flex:1;display:flex;flex-direction:row;align-items:center;gap:40px;background:#FFFEFB;border:1px solid #E4E0D6;border-radius:20px;padding:24px 32px">
+<div style="width:500px;display:flex;flex-direction:column;gap:8px">
+<div style="display:flex;flex-direction:row;align-items:center;justify-content:space-between;gap:16px">
+<h3 style="font-family:'Oswald', Arial, sans-serif;font-size:40px;font-weight:500;line-height:1.2;color:#1B2333">B5 · Player LSTM</h3>
+<p style="font-size:26px;font-weight:600;color:#A8431A;background:#FCE3D4;padding:4px 16px;border-radius:999px">66.3%</p>
+</div>
+<p style="font-size:24px;line-height:1.35;color:#4A5263">Players and time together: each player's 9 frames go through their own LSTM, then players are pooled.</p>
+</div>
+<div style="flex:1;display:flex;flex-direction:row;align-items:center;gap:10px">
+<p style="font-size:24px;line-height:1.25;text-align:center;white-space:nowrap;background:#EDF0F4;padding:10px 14px;border-radius:12px">Player<br>tracks ×9</p>
+<x-shape kind="arrow-right" style="width:28px;height:16px;background:#9AA3B2"></x-shape>
+<p style="font-size:24px;line-height:1.25;text-align:center;white-space:nowrap;background:#EDF0F4;padding:10px 14px;border-radius:12px">ResNet-50<br>frozen</p>
+<x-shape kind="arrow-right" style="width:28px;height:16px;background:#9AA3B2"></x-shape>
+<p style="font-size:24px;line-height:1.25;text-align:center;white-space:nowrap;background:#FCE3D4;border:2px solid #C9531F;padding:10px 14px;border-radius:12px">Player<br>LSTM</p>
+<x-shape kind="arrow-right" style="width:28px;height:16px;background:#9AA3B2"></x-shape>
+<p style="font-size:24px;line-height:1.25;text-align:center;white-space:nowrap;background:#EDF0F4;padding:10px 14px;border-radius:12px">Pool<br>players</p>
+<x-shape kind="arrow-right" style="width:28px;height:16px;background:#9AA3B2"></x-shape>
+<p style="font-size:24px;line-height:1.25;text-align:center;white-space:nowrap;background:#EDF0F4;padding:10px 14px;border-radius:12px">MLP → 8<br>activities</p>
+</div>
+</div>
+<div style="flex:1;display:flex;flex-direction:row;align-items:center;gap:40px;background:#FFFEFB;border:1px solid #E4E0D6;border-radius:20px;padding:24px 32px">
+<div style="width:500px;display:flex;flex-direction:column;gap:8px">
+<div style="display:flex;flex-direction:row;align-items:center;justify-content:space-between;gap:16px">
+<h3 style="font-family:'Oswald', Arial, sans-serif;font-size:40px;font-weight:500;line-height:1.2;color:#1B2333">B6 · Scene LSTM</h3>
+<p style="font-size:26px;font-weight:600;color:#A8431A;background:#FCE3D4;padding:4px 16px;border-radius:999px">70.5%</p>
+</div>
+<p style="font-size:24px;line-height:1.35;color:#4A5263">Time at the scene level: pool the players in each frame, then one LSTM over the clip, with a skip connection.</p>
+</div>
+<div style="flex:1;display:flex;flex-direction:row;align-items:center;gap:10px">
+<p style="font-size:24px;line-height:1.25;text-align:center;white-space:nowrap;background:#EDF0F4;padding:10px 14px;border-radius:12px">Player<br>crops ×9</p>
+<x-shape kind="arrow-right" style="width:28px;height:16px;background:#9AA3B2"></x-shape>
+<p style="font-size:24px;line-height:1.25;text-align:center;white-space:nowrap;background:#EDF0F4;padding:10px 14px;border-radius:12px">ResNet-50<br>frozen</p>
+<x-shape kind="arrow-right" style="width:28px;height:16px;background:#9AA3B2"></x-shape>
+<p style="font-size:24px;line-height:1.25;text-align:center;white-space:nowrap;background:#EDF0F4;padding:10px 14px;border-radius:12px">Pool per<br>frame</p>
+<x-shape kind="arrow-right" style="width:28px;height:16px;background:#9AA3B2"></x-shape>
+<p style="font-size:24px;line-height:1.25;text-align:center;white-space:nowrap;background:#FCE3D4;border:2px solid #C9531F;padding:10px 14px;border-radius:12px">Scene LSTM<br>+ Conv1d</p>
+<x-shape kind="arrow-right" style="width:28px;height:16px;background:#9AA3B2"></x-shape>
+<p style="font-size:24px;line-height:1.25;text-align:center;white-space:nowrap;background:#EDF0F4;padding:10px 14px;border-radius:12px">MLP → 8<br>activities</p>
+</div>
+</div>
+<div style="flex:1;display:flex;flex-direction:row;align-items:center;gap:40px;background:#FFFEFB;border:1px solid #E4E0D6;border-radius:20px;padding:24px 32px">
+<div style="width:500px;display:flex;flex-direction:column;gap:8px">
+<div style="display:flex;flex-direction:row;align-items:center;justify-content:space-between;gap:16px">
+<h3 style="font-family:'Oswald', Arial, sans-serif;font-size:40px;font-weight:500;line-height:1.2;color:#1B2333">B7 · Hierarchy</h3>
+<p style="font-size:26px;font-weight:600;color:#A8431A;background:#FCE3D4;padding:4px 16px;border-radius:999px">73.8%</p>
+</div>
+<p style="font-size:24px;line-height:1.35;color:#4A5263">The paper's model: a player LSTM, pooling per frame, then a scene LSTM, on frozen ResNet-50 features.</p>
+</div>
+<div style="flex:1;display:flex;flex-direction:row;align-items:center;gap:10px">
+<p style="font-size:24px;line-height:1.25;text-align:center;white-space:nowrap;background:#EDF0F4;padding:10px 14px;border-radius:12px">Player<br>tracks ×9</p>
+<x-shape kind="arrow-right" style="width:28px;height:16px;background:#9AA3B2"></x-shape>
+<p style="font-size:24px;line-height:1.25;text-align:center;white-space:nowrap;background:#FCE3D4;border:2px solid #C9531F;padding:10px 14px;border-radius:12px">Player<br>LSTM₁</p>
+<x-shape kind="arrow-right" style="width:28px;height:16px;background:#9AA3B2"></x-shape>
+<p style="font-size:24px;line-height:1.25;text-align:center;white-space:nowrap;background:#EDF0F4;padding:10px 14px;border-radius:12px">Pool per<br>frame</p>
+<x-shape kind="arrow-right" style="width:28px;height:16px;background:#9AA3B2"></x-shape>
+<p style="font-size:24px;line-height:1.25;text-align:center;white-space:nowrap;background:#FCE3D4;border:2px solid #C9531F;padding:10px 14px;border-radius:12px">Scene<br>LSTM₂</p>
+<x-shape kind="arrow-right" style="width:28px;height:16px;background:#9AA3B2"></x-shape>
+<p style="font-size:24px;line-height:1.25;text-align:center;white-space:nowrap;background:#EDF0F4;padding:10px 14px;border-radius:12px">MLP → 8<br>activities</p>
+</div>
+</div>
+<aside>B7 keeps two skip connections on top of the paper's design. It still pools all players together, so it cannot tell which side acted; that is what B8 fixes.</aside>
+</section>
+
+<section id="b8-b9" style="background:#F6F4EF;color:#1B2333;font-family:'IBM Plex Sans', Arial, sans-serif;padding:72px 96px;display:flex;flex-direction:column;gap:28px">
+<div style="display:flex;flex-direction:row;align-items:end;justify-content:space-between;gap:32px">
+<div style="display:flex;flex-direction:column;gap:8px">
+<p style="font-size:24px;letter-spacing:3px;text-transform:uppercase;font-weight:600;color:#A8431A">Volleyball group activity recognition · 3 / 3</p>
+<h2 style="font-family:'Oswald', Arial, sans-serif;font-size:60px;font-weight:600;line-height:1.1;color:#1B2333">One change wins: pool each team separately</h2>
+</div>
+<p style="font-size:24px;color:#4A5263;text-align:right">Test accuracy, 1,337 held-out clips<br><span style="color:#A8431A">Highlighted = new in this step</span></p>
+</div>
+<div style="flex:1;display:flex;flex-direction:row;align-items:center;gap:40px;background:#FFFEFB;border:1px solid #E4E0D6;border-radius:20px;padding:24px 32px">
+<div style="width:500px;display:flex;flex-direction:column;gap:8px">
+<div style="display:flex;flex-direction:row;align-items:center;justify-content:space-between;gap:16px">
+<h3 style="font-family:'Oswald', Arial, sans-serif;font-size:40px;font-weight:500;line-height:1.2;color:#1B2333">B8 · Team split</h3>
+<p style="font-size:26px;font-weight:600;color:#FBF3EC;background:#A8431A;padding:4px 16px;border-radius:999px">85.6%</p>
+</div>
+<p style="font-size:24px;line-height:1.35;color:#4A5263">B7 with one change: each team is pooled on its own, so left and right stay apart. +11.9 points over B7.</p>
+</div>
+<div style="flex:1;display:flex;flex-direction:row;align-items:center;gap:10px">
+<p style="font-size:24px;line-height:1.25;text-align:center;white-space:nowrap;background:#EDF0F4;padding:10px 14px;border-radius:12px">Player<br>tracks ×9</p>
+<x-shape kind="arrow-right" style="width:28px;height:16px;background:#9AA3B2"></x-shape>
+<p style="font-size:24px;line-height:1.25;text-align:center;white-space:nowrap;background:#EDF0F4;padding:10px 14px;border-radius:12px">Player<br>LSTM₁</p>
+<x-shape kind="arrow-right" style="width:28px;height:16px;background:#9AA3B2"></x-shape>
+<div style="display:flex;flex-direction:column;gap:6px">
+<p style="font-size:24px;line-height:1.25;text-align:center;white-space:nowrap;background:#DCE8F7;border:2px solid #2F6FB0;padding:6px 14px;border-radius:12px">Pool left team</p>
+<p style="font-size:24px;line-height:1.25;text-align:center;white-space:nowrap;background:#FCE3D4;border:2px solid #C9531F;padding:6px 14px;border-radius:12px">Pool right team</p>
+</div>
+<x-shape kind="arrow-right" style="width:28px;height:16px;background:#9AA3B2"></x-shape>
+<p style="font-size:24px;line-height:1.25;text-align:center;white-space:nowrap;background:#EDF0F4;padding:10px 14px;border-radius:12px">Scene<br>LSTM₂</p>
+<x-shape kind="arrow-right" style="width:28px;height:16px;background:#9AA3B2"></x-shape>
+<p style="font-size:24px;line-height:1.25;text-align:center;white-space:nowrap;background:#EDF0F4;padding:10px 14px;border-radius:12px">MLP → 8<br>activities</p>
+</div>
+</div>
+<div style="flex:1;display:flex;flex-direction:row;align-items:center;gap:40px;background:#FFFEFB;border:1px solid #E4E0D6;border-radius:20px;padding:24px 32px">
+<div style="width:500px;display:flex;flex-direction:column;gap:8px">
+<div style="display:flex;flex-direction:row;align-items:center;justify-content:space-between;gap:16px">
+<h3 style="font-family:'Oswald', Arial, sans-serif;font-size:40px;font-weight:500;line-height:1.2;color:#1B2333">B9 · Control</h3>
+<p style="font-size:26px;font-weight:600;color:#A8431A;background:#FCE3D4;padding:4px 16px;border-radius:999px">80.3%</p>
+</div>
+<p style="font-size:24px;line-height:1.35;color:#4A5263">One YOLO classifier on the whole frame. No boxes, no tracks, no player labels; frames vote per clip.</p>
+</div>
+<div style="flex:1;display:flex;flex-direction:row;align-items:center;gap:10px">
+<p style="font-size:24px;line-height:1.25;text-align:center;white-space:nowrap;background:#EDF0F4;padding:10px 14px;border-radius:12px">Full frame<br>224×224</p>
+<x-shape kind="arrow-right" style="width:28px;height:16px;background:#9AA3B2"></x-shape>
+<p style="font-size:24px;line-height:1.25;text-align:center;white-space:nowrap;background:#FCE3D4;border:2px solid #C9531F;padding:10px 14px;border-radius:12px">YOLO26-x<br>classifier</p>
+<x-shape kind="arrow-right" style="width:28px;height:16px;background:#9AA3B2"></x-shape>
+<p style="font-size:24px;line-height:1.25;text-align:center;white-space:nowrap;background:#EDF0F4;padding:10px 14px;border-radius:12px">Vote over<br>10 frames</p>
+<x-shape kind="arrow-right" style="width:28px;height:16px;background:#9AA3B2"></x-shape>
+<p style="font-size:24px;line-height:1.25;text-align:center;white-space:nowrap;background:#EDF0F4;padding:10px 14px;border-radius:12px">8<br>activities</p>
+</div>
+</div>
+<div style="flex:1;display:flex;flex-direction:row;align-items:center;gap:40px;background:#1B2333;border-radius:20px;padding:24px 40px">
+<p style="font-family:'Oswald', Arial, sans-serif;font-size:96px;font-weight:600;line-height:1.1;color:#F4A57A;white-space:nowrap">85.6%</p>
+<div style="flex:1;display:flex;flex-direction:column;gap:10px">
+<p style="font-size:28px;line-height:1.35;color:#F6F4EF">B8 beats the CVPR 2016 paper (81.9%) and stays about 5 points ahead of the frame-only B9, so player structure pays once the teams are kept apart.</p>
+<p style="font-size:24px;line-height:1.35;color:#BFC8D6">Code: github.com/omarTBakr/Volleyball-Group-Activity-Recognition · Demo: huggingface.co/spaces/OmarTBakr/volleyball-activity-demo</p>
+</div>
+</div>
+<aside>B9 is scored per clip here (majority vote over 10 frames, 80.3%); per frame it scores 78.9%. Both use the same 1,337 test clips as B1 to B8.</aside>
+</section>
+
+</body></html>

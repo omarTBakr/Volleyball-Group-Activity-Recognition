@@ -1,0 +1,70 @@
+<section id="b5-b7" data-transition="push" style="background:#F6F4EF;color:#1B2333;font-family:'IBM Plex Sans', Arial, sans-serif;padding:72px 96px;display:flex;flex-direction:column;gap:28px">
+<div style="display:flex;flex-direction:row;align-items:end;justify-content:space-between;gap:32px">
+<div style="display:flex;flex-direction:column;gap:8px">
+<p style="font-size:24px;letter-spacing:3px;text-transform:uppercase;font-weight:600;color:#A8431A">Volleyball group activity recognition · 2 / 3</p>
+<h2 style="font-family:'Oswald', Arial, sans-serif;font-size:60px;font-weight:600;line-height:1.1;color:#1B2333">Players over time, then the full hierarchy</h2>
+</div>
+<p style="font-size:24px;color:#4A5263;text-align:right">Test accuracy, 1,337 held-out clips<br><span style="color:#A8431A">Highlighted = new in this step</span></p>
+</div>
+<div style="flex:1;display:flex;flex-direction:row;align-items:center;gap:40px;background:#FFFEFB;border:1px solid #E4E0D6;border-radius:20px;padding:24px 32px">
+<div style="width:500px;display:flex;flex-direction:column;gap:8px">
+<div style="display:flex;flex-direction:row;align-items:center;justify-content:space-between;gap:16px">
+<h3 style="font-family:'Oswald', Arial, sans-serif;font-size:40px;font-weight:500;line-height:1.2;color:#1B2333">B5 · Player LSTM</h3>
+<p style="font-size:26px;font-weight:600;color:#A8431A;background:#FCE3D4;padding:4px 16px;border-radius:999px">66.3%</p>
+</div>
+<p style="font-size:24px;line-height:1.35;color:#4A5263">Players and time together: each player's 9 frames go through their own LSTM, then players are pooled.</p>
+</div>
+<div style="flex:1;display:flex;flex-direction:row;align-items:center;gap:10px">
+<p style="font-size:24px;line-height:1.25;text-align:center;white-space:nowrap;background:#EDF0F4;padding:10px 14px;border-radius:12px">Player<br>tracks ×9</p>
+<x-shape kind="arrow-right" style="width:28px;height:16px;background:#9AA3B2"></x-shape>
+<p style="font-size:24px;line-height:1.25;text-align:center;white-space:nowrap;background:#EDF0F4;padding:10px 14px;border-radius:12px">ResNet-50<br>frozen</p>
+<x-shape kind="arrow-right" style="width:28px;height:16px;background:#9AA3B2"></x-shape>
+<p style="font-size:24px;line-height:1.25;text-align:center;white-space:nowrap;background:#FCE3D4;border:2px solid #C9531F;padding:10px 14px;border-radius:12px">Player<br>LSTM</p>
+<x-shape kind="arrow-right" style="width:28px;height:16px;background:#9AA3B2"></x-shape>
+<p style="font-size:24px;line-height:1.25;text-align:center;white-space:nowrap;background:#EDF0F4;padding:10px 14px;border-radius:12px">Pool<br>players</p>
+<x-shape kind="arrow-right" style="width:28px;height:16px;background:#9AA3B2"></x-shape>
+<p style="font-size:24px;line-height:1.25;text-align:center;white-space:nowrap;background:#EDF0F4;padding:10px 14px;border-radius:12px">MLP → 8<br>activities</p>
+</div>
+</div>
+<div style="flex:1;display:flex;flex-direction:row;align-items:center;gap:40px;background:#FFFEFB;border:1px solid #E4E0D6;border-radius:20px;padding:24px 32px">
+<div style="width:500px;display:flex;flex-direction:column;gap:8px">
+<div style="display:flex;flex-direction:row;align-items:center;justify-content:space-between;gap:16px">
+<h3 style="font-family:'Oswald', Arial, sans-serif;font-size:40px;font-weight:500;line-height:1.2;color:#1B2333">B6 · Scene LSTM</h3>
+<p style="font-size:26px;font-weight:600;color:#A8431A;background:#FCE3D4;padding:4px 16px;border-radius:999px">70.5%</p>
+</div>
+<p style="font-size:24px;line-height:1.35;color:#4A5263">Time at the scene level: pool the players in each frame, then one LSTM over the clip, with a skip connection.</p>
+</div>
+<div style="flex:1;display:flex;flex-direction:row;align-items:center;gap:10px">
+<p style="font-size:24px;line-height:1.25;text-align:center;white-space:nowrap;background:#EDF0F4;padding:10px 14px;border-radius:12px">Player<br>crops ×9</p>
+<x-shape kind="arrow-right" style="width:28px;height:16px;background:#9AA3B2"></x-shape>
+<p style="font-size:24px;line-height:1.25;text-align:center;white-space:nowrap;background:#EDF0F4;padding:10px 14px;border-radius:12px">ResNet-50<br>frozen</p>
+<x-shape kind="arrow-right" style="width:28px;height:16px;background:#9AA3B2"></x-shape>
+<p style="font-size:24px;line-height:1.25;text-align:center;white-space:nowrap;background:#EDF0F4;padding:10px 14px;border-radius:12px">Pool per<br>frame</p>
+<x-shape kind="arrow-right" style="width:28px;height:16px;background:#9AA3B2"></x-shape>
+<p style="font-size:24px;line-height:1.25;text-align:center;white-space:nowrap;background:#FCE3D4;border:2px solid #C9531F;padding:10px 14px;border-radius:12px">Scene LSTM<br>+ Conv1d</p>
+<x-shape kind="arrow-right" style="width:28px;height:16px;background:#9AA3B2"></x-shape>
+<p style="font-size:24px;line-height:1.25;text-align:center;white-space:nowrap;background:#EDF0F4;padding:10px 14px;border-radius:12px">MLP → 8<br>activities</p>
+</div>
+</div>
+<div style="flex:1;display:flex;flex-direction:row;align-items:center;gap:40px;background:#FFFEFB;border:1px solid #E4E0D6;border-radius:20px;padding:24px 32px">
+<div style="width:500px;display:flex;flex-direction:column;gap:8px">
+<div style="display:flex;flex-direction:row;align-items:center;justify-content:space-between;gap:16px">
+<h3 style="font-family:'Oswald', Arial, sans-serif;font-size:40px;font-weight:500;line-height:1.2;color:#1B2333">B7 · Hierarchy</h3>
+<p style="font-size:26px;font-weight:600;color:#A8431A;background:#FCE3D4;padding:4px 16px;border-radius:999px">73.8%</p>
+</div>
+<p style="font-size:24px;line-height:1.35;color:#4A5263">The paper's model: a player LSTM, pooling per frame, then a scene LSTM, on frozen ResNet-50 features.</p>
+</div>
+<div style="flex:1;display:flex;flex-direction:row;align-items:center;gap:10px">
+<p style="font-size:24px;line-height:1.25;text-align:center;white-space:nowrap;background:#EDF0F4;padding:10px 14px;border-radius:12px">Player<br>tracks ×9</p>
+<x-shape kind="arrow-right" style="width:28px;height:16px;background:#9AA3B2"></x-shape>
+<p style="font-size:24px;line-height:1.25;text-align:center;white-space:nowrap;background:#FCE3D4;border:2px solid #C9531F;padding:10px 14px;border-radius:12px">Player<br>LSTM₁</p>
+<x-shape kind="arrow-right" style="width:28px;height:16px;background:#9AA3B2"></x-shape>
+<p style="font-size:24px;line-height:1.25;text-align:center;white-space:nowrap;background:#EDF0F4;padding:10px 14px;border-radius:12px">Pool per<br>frame</p>
+<x-shape kind="arrow-right" style="width:28px;height:16px;background:#9AA3B2"></x-shape>
+<p style="font-size:24px;line-height:1.25;text-align:center;white-space:nowrap;background:#FCE3D4;border:2px solid #C9531F;padding:10px 14px;border-radius:12px">Scene<br>LSTM₂</p>
+<x-shape kind="arrow-right" style="width:28px;height:16px;background:#9AA3B2"></x-shape>
+<p style="font-size:24px;line-height:1.25;text-align:center;white-space:nowrap;background:#EDF0F4;padding:10px 14px;border-radius:12px">MLP → 8<br>activities</p>
+</div>
+</div>
+<aside>B7 keeps two skip connections on top of the paper's design. It still pools all players together, so it cannot tell which side acted; that is what B8 fixes.</aside>
+</section>
