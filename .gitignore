@@ -91,3 +91,6 @@ best_model.pth
 BUG_REPORT.md
 PERFORMANCE_AUDIT_PLAN.md
 B5_OOM_REPORT.md
+
+# Regenerable with `python -m space.build_bundle` (51 MB of frames; already on Hugging Face)
+space/clips/

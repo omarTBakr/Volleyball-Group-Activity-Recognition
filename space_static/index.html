@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Volleyball Group Activity Recognition</title>
+<style>
+  :root { --bg:#fafafa; --fg:#1b1f24; --muted:#5b6470; --card:#fff; --line:#e1e4e8; --ok:#1f9d55; --bad:#d64545; --bar:#4287f5; --accent:#f5a032; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#0f1317; --fg:#e8ebef; --muted:#9aa4b2; --card:#171c22; --line:#2a313a; --ok:#3ecf7a; --bad:#ff6b6b; --bar:#6aa3ff; --accent:#ffb454; } }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg); font:16px/1.5 system-ui,-apple-system,Segoe UI,Roboto,sans-serif; }
+  main { max-width:960px; margin:0 auto; padding:24px 16px 48px; }
+  h1 { font-size:1.6rem; margin:0 0 4px; }
+  .sub { color:var(--muted); margin:0 0 16px; }
+  .note { border:1px solid var(--line); border-left:4px solid var(--accent); background:var(--card); padding:10px 14px; border-radius:6px; font-size:.92rem; margin-bottom:20px; }
+  .layout { display:grid; grid-template-columns:200px 1fr; gap:20px; }
+  @media (max-width:700px) { .layout { grid-template-columns:1fr; } }
+  .list { display:flex; flex-direction:column; gap:6px; max-height:560px; overflow:auto; }
+  @media (max-width:700px) { .list { flex-direction:row; flex-wrap:wrap; max-height:none; } }
+  .item { border:1px solid var(--line); background:var(--card); color:var(--fg); border-radius:6px; padding:6px 10px; text-align:left; cursor:pointer; font:inherit; font-size:.88rem; }
+  .item[aria-pressed="true"] { border-color:var(--bar); outline:2px solid var(--bar); }
+  .item .dot { display:inline-block; width:8px; height:8px; border-radius:50%; margin-right:6px; background:var(--ok); }
+  .item .dot.bad { background:var(--bad); }
+  .panel { background:var(--card); border:1px solid var(--line); border-radius:8px; padding:14px; }
+  .panel img { width:100%; border-radius:6px; display:block; }
+  .verdict { margin:12px 0 8px; font-weight:600; }
+  .verdict .ok { color:var(--ok); } .verdict .bad { color:var(--bad); }
+  .row { display:grid; grid-template-columns:96px 1fr 52px; align-items:center; gap:8px; font-size:.88rem; margin:3px 0; }
+  .track { background:var(--line); border-radius:4px; height:10px; overflow:hidden; }
+  .fill { background:var(--bar); height:100%; }
+  .row.top .fill { background:var(--accent); } .row.top { font-weight:600; }
+  .legend { color:var(--muted); font-size:.85rem; margin-top:10px; }
+  .sw { display:inline-block; width:10px; height:10px; border-radius:2px; margin:0 4px 0 8px; vertical-align:middle; }
+  footer { color:var(--muted); font-size:.85rem; margin-top:28px; }
+  a { color:var(--bar); }
+</style>
+</head>
+<body>
+<main>
+  <h1>Volleyball Group Activity Recognition</h1>
+  <p class="sub">Baseline 8: player LSTM, team-split pooling, scene LSTM. Reads 9 frames and tracked player boxes, predicts 1 of 8 group activities.</p>
+
+  <div class="note"><strong>Precomputed results, not live inference.</strong>
+    Baseline 8 was run offline on 20 held-out <em>validation</em> clips (2 per activity plus 4 more, chosen with a fixed random seed, not by outcome).
+    Twenty clips are for illustration, not an accuracy estimate: the reported test accuracy is <strong>85.64%</strong> on 1,337 clips.</div>
+
+  <div class="layout">
+    <div class="list" id="list" role="list"></div>
+    <div class="panel">
+      <img id="gif" alt="Annotated clip">
+      <div class="verdict" id="verdict"></div>
+      <div id="bars"></div>
+      <div class="legend">Boxes:<span class="sw" style="background:#4287f5"></span>left team<span class="sw" style="background:#f5a032"></span>right team. Banner is green when the prediction matches the ground truth.</div>
+    </div>
+  </div>
+
+  <footer>Model weights and card: <a href="https://huggingface.co/OmarTBakr/volleyball-activity-b8">OmarTBakr/volleyball-activity-b8</a>.
+    Limitation: the model needs tracked player boxes (here taken from the dataset annotations); it has no detector or tracker.</footer>
+</main>
+<script>
+fetch("results.json").then(r => r.json()).then(results => {
+  const list = document.getElementById("list");
+  const buttons = results.map((r, i) => {
+    const b = document.createElement("button");
+    b.className = "item"; b.setAttribute("aria-pressed", "false");
+    b.innerHTML = `<span class="dot ${r.correct ? "" : "bad"}"></span>${r.video_id}/${r.clip_id}`;
+    b.onclick = () => show(i);
+    list.appendChild(b);
+    return b;
+  });
+  function show(i) {
+    const r = results[i];
+    buttons.forEach((b, j) => b.setAttribute("aria-pressed", j === i));
+    document.getElementById("gif").src = `gifs/${r.clip}.gif`;
+    document.getElementById("verdict").innerHTML =
+      `Predicted <b>${r.prediction}</b> &middot; ground truth <b>${r.ground_truth}</b> &middot; ` +
+      `<span class="${r.correct ? "ok" : "bad"}">${r.correct ? "correct" : "wrong"}</span>`;
+    const rows = Object.entries(r.probs).sort((a, b) => b[1] - a[1]);
+    document.getElementById("bars").innerHTML = rows.map(([k, p], n) =>
+      `<div class="row ${n === 0 ? "top" : ""}"><span>${k}</span><div class="track"><div class="fill" style="width:${(p * 100).toFixed(1)}%"></div></div><span>${(p * 100).toFixed(1)}%</span></div>`).join("");
+  }
+  show(0);
+});
+</script>
+</body>
+</html>
