@@ -1,0 +1,123 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Volleyball Activity API</title>
+<style>
+  :root { --bg:#f6f7f9; --fg:#1b1f24; --muted:#5b6470; --card:#fff; --line:#dfe3e8; --ok:#1f9d55; --bad:#d64545; --bar:#4287f5; --top:#f5a032; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#0f1317; --fg:#e8ebef; --muted:#9aa4b2; --card:#171c22; --line:#2a313a; --ok:#3ecf7a; --bad:#ff6b6b; --bar:#6aa3ff; --top:#ffb454; } }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg); font:15px/1.5 system-ui,-apple-system,Segoe UI,Roboto,sans-serif; }
+  main { max-width:1000px; margin:0 auto; padding:24px 16px 40px; }
+  h1 { font-size:1.5rem; margin:0; }
+  .sub { color:var(--muted); margin:2px 0 16px; }
+  .status { font-size:.85rem; color:var(--muted); }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:8px; padding:14px; }
+  .controls { display:flex; flex-wrap:wrap; gap:16px; align-items:end; margin-bottom:16px; }
+  .group { display:flex; gap:8px; align-items:end; flex-wrap:wrap; }
+  .sep { width:1px; align-self:stretch; background:var(--line); }
+  label { display:flex; flex-direction:column; font-size:.8rem; color:var(--muted); gap:3px; }
+  input { font:inherit; padding:6px 8px; width:110px; border:1px solid var(--line); border-radius:6px; background:var(--bg); color:var(--fg); }
+  button { font:inherit; padding:7px 14px; border-radius:6px; border:1px solid var(--bar); background:var(--bar); color:#fff; cursor:pointer; }
+  button.ghost { background:transparent; color:var(--bar); }
+  button:disabled { opacity:.5; cursor:wait; }
+  .result { display:grid; grid-template-columns:1.5fr 1fr; gap:16px; }
+  @media (max-width:760px) { .result { grid-template-columns:1fr; } }
+  #gif { width:100%; border-radius:6px; display:block; background:var(--line); min-height:200px; }
+  .verdict { font-size:1.05rem; margin:0 0 10px; }
+  .ok { color:var(--ok); font-weight:600; } .bad { color:var(--bad); font-weight:600; }
+  .meta { color:var(--muted); font-size:.85rem; margin-bottom:10px; }
+  .row { display:grid; grid-template-columns:90px 1fr 50px; gap:8px; align-items:center; font-size:.85rem; margin:4px 0; }
+  .track { height:10px; background:var(--line); border-radius:4px; overflow:hidden; }
+  .fill { height:100%; background:var(--bar); }
+  .row.top { font-weight:600; } .row.top .fill { background:var(--top); }
+  .legend { color:var(--muted); font-size:.8rem; margin-top:12px; }
+  .sw { display:inline-block; width:10px; height:10px; border-radius:2px; vertical-align:middle; margin:0 4px 0 8px; }
+  .error { color:var(--bad); margin:0 0 12px; }
+  .hidden { display:none; }
+  a { color:var(--bar); }
+</style>
+</head>
+<body>
+<main>
+  <h1>Volleyball Group Activity Recognition</h1>
+  <p class="sub">Baseline 8 on held-out validation clips (9 frames + tracked player boxes). <a href="/docs">API docs</a></p>
+  <p class="status" id="status">Checking server…</p>
+
+  <div class="card controls">
+    <div class="group">
+      <label>Seed (optional)<input id="seed" type="number" min="0" placeholder="random"></label>
+      <button id="randomBtn">Random clip</button>
+    </div>
+    <div class="sep"></div>
+    <div class="group">
+      <label>Video id<input id="vid" placeholder="e.g. 2"></label>
+      <label>Clip id<input id="cid" placeholder="e.g. 54400"></label>
+      <button id="clipBtn" class="ghost">Predict clip</button>
+    </div>
+  </div>
+
+  <p class="error hidden" id="error"></p>
+
+  <div class="result hidden" id="result">
+    <div class="card"><img id="gif" alt="Annotated clip"></div>
+    <div class="card">
+      <p class="verdict" id="verdict"></p>
+      <div class="meta" id="meta"></div>
+      <div id="bars"></div>
+      <div class="legend">Boxes:<span class="sw" style="background:#4287f5"></span>left team<span class="sw" style="background:#f5a032"></span>right team</div>
+    </div>
+  </div>
+</main>
+<script>
+const $ = id => document.getElementById(id);
+const buttons = [$("randomBtn"), $("clipBtn")];
+
+fetch("/health").then(r => r.json()).then(h => {
+  $("status").textContent = `Server ready · model ${h.model} on ${h.device} · ${h.validation_clips} validation clips`;
+}).catch(() => { $("status").textContent = "Server not reachable"; });
+
+async function run(jsonReq, gifUrl) {
+  buttons.forEach(b => b.disabled = true);
+  $("error").classList.add("hidden");
+  try {
+    const r = await jsonReq();
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.detail || `HTTP ${r.status}`);
+    render(data, gifUrl(data));
+  } catch (e) {
+    $("error").textContent = `Error: ${e.message}`;
+    $("error").classList.remove("hidden");
+  } finally {
+    buttons.forEach(b => b.disabled = false);
+  }
+}
+
+function render(d, gifSrc) {
+  $("gif").src = gifSrc;
+  $("verdict").innerHTML = `Predicted <b>${d.prediction}</b> · ground truth <b>${d.ground_truth}</b> · ` +
+    `<span class="${d.correct ? "ok" : "bad"}">${d.correct ? "correct" : "wrong"}</span>`;
+  $("meta").textContent = `Clip ${d.video_id}/${d.clip_id} · ${d.frames[Math.floor(d.frames.length / 2)].length} players in the middle frame`;
+  $("bars").innerHTML = Object.entries(d.probabilities).sort((a, b) => b[1] - a[1]).map(([k, p], i) =>
+    `<div class="row ${i === 0 ? "top" : ""}"><span>${k}</span><div class="track"><div class="fill" style="width:${(p * 100).toFixed(1)}%"></div></div><span>${(p * 100).toFixed(1)}%</span></div>`).join("");
+  $("result").classList.remove("hidden");
+  $("vid").value = d.video_id; $("cid").value = d.clip_id;
+}
+
+$("randomBtn").onclick = () => {
+  // Same seed for both calls so the JSON and the GIF describe the same clip.
+  const seed = $("seed").value || Math.floor(Math.random() * 1e9);
+  run(() => fetch(`/predict/random-validation?seed=${seed}`),
+      () => `/predict/random-validation/video?seed=${seed}`);
+};
+
+$("clipBtn").onclick = () => {
+  const video_id = $("vid").value.trim(), clip_id = $("cid").value.trim();
+  if (!video_id || !clip_id) { $("error").textContent = "Enter a video id and a clip id."; $("error").classList.remove("hidden"); return; }
+  run(() => fetch("/predict/clip", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ video_id, clip_id }) }),
+      () => `/predict/clip/video?video_id=${encodeURIComponent(video_id)}&clip_id=${encodeURIComponent(clip_id)}`);
+};
+</script>
+</body>
+</html>

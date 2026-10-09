@@ -602,7 +602,7 @@ So the hierarchy is worth roughly **+3 to +7 accuracy points** — real, reprodu
 B8 can be served locally. It needs **tracked player boxes**, so the service runs on clips from the dataset's validation split (boxes included) instead of arbitrary uploaded video.
 
 ```bash
-uv run uvicorn src.api.main:app --port 8000     # then open http://localhost:8000/docs
+uv run uvicorn src.api.main:app --port 8000     # UI at http://localhost:8000/ , API docs at /docs
 curl "localhost:8000/predict/random-validation?seed=3"                       # JSON: prediction, 8 probabilities, per-frame player boxes
 curl "localhost:8000/predict/random-validation/video?seed=3" -o clip.gif     # boxes coloured by team + predicted vs. true label
 curl -X POST localhost:8000/predict/clip -H 'content-type: application/json' \
@@ -615,9 +615,10 @@ curl -X POST localhost:8000/predict/clip -H 'content-type: application/json' \
 | Pick / load a validation clip, with raw frames and boxes | `src/inference/sample.py` |
 | Draw boxes + prediction, write GIF/MP4 | `src/inference/render.py` |
 | FastAPI app | `src/api/main.py` |
+| Browser UI (random or chosen clip, annotated GIF, probability bars) | `src/api/static/index.html`, served at `/` |
 | Preprocessing sanity check | `uv run python -m src.inference.check --n 200` |
 
-The checkpoint is `saved_models/baseline8_stage_b_run1.pt` (override with `VB_B8_CKPT`). `src.inference.check` scores random validation clips as a wiring check — it measured **82.0% on 200 clips**, consistent with the reported test numbers but **not** a replacement for them; the results tables above remain the test split. `uv run pytest tests` runs the API and aggregation tests.
+The checkpoint is `saved_models/baseline8_stage_b_run1.pt` (override with `VB_B8_CKPT`). `src.inference.check` scores random validation clips as a wiring check — it measured **82.0% on 200 clips**, consistent with the reported test numbers but **not** a replacement for them; the results tables above remain the test split. `uv run pytest tests` runs the API, UI and aggregation tests (12).
 
 ### Hugging Face
 

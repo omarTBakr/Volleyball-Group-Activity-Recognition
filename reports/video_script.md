@@ -6,7 +6,7 @@ Every number below comes from the README or report. Say these numbers and no oth
 
 1. Start the API once so the model is loaded (it takes about a minute to start):
    `uv run uvicorn src.api.main:app --port 8000`
-2. Open in browser tabs: `http://localhost:8000/docs`, the Hugging Face model repo, the Hugging Face Space.
+2. Open in browser tabs: `http://localhost:8000/` (UI), `http://localhost:8000/docs`, the Hugging Face model repo, the Hugging Face Space.
    Make the repos public first, or record while logged in.
 3. Pre-run `curl "localhost:8000/predict/random-validation?seed=3"` so you know the output looks right.
 4. Terminal font 18pt+, browser zoom 125%.
@@ -20,7 +20,7 @@ Every number below comes from the README or report. Say these numbers and no oth
 | 3 | 0:55–2:00 | `reports/figures/progression.png` (hold on it) | "Each model adds one idea. A single frame gets 62.6%. Adding player crops, then LSTMs over time, climbs to 73.8% with a hierarchy: a player LSTM, pooling, then a scene LSTM. But that model confuses left and right: it pools all players together, so it can't tell which team is acting. Pooling each team separately, B8, jumps 11.9 points to 85.6%, above the paper's 81.9%." |
 | 4 | 2:00–2:20 | `reports/figures/b8_confusion_matrix.png` | "The confusion matrix shows the left/right confusion is largely gone." (Only say "largely" if the matrix shows it; look at it first.) |
 | 5 | 2:20–3:10 | README "B1–B8 vs. B9" table, then the B9 confusion matrix | "As a control I threw the hierarchy away. B9 is one YOLO classifier on the raw frame: no player boxes, no player labels. Scored per frame it got 78.9%. Scored per clip, with a vote over each clip's ten frames, so it's comparable to the others, it gets 80.3%. So the hierarchy buys about 5 points, and B9's errors are set versus pass: one player's arm posture, about 17 by 62 pixels in a 224-pixel frame." |
-| 6 | 3:10–4:10 | Terminal + `/docs` | "Now the demo. The service loads B8 once, then serves it. This endpoint picks a random held-out validation clip and returns the prediction, the 8 probabilities and the player boxes." Run `curl "localhost:8000/predict/random-validation?seed=3"`. Then open `/predict/random-validation/video?seed=3` in the browser: the GIF shows boxes coloured by team and predicted vs. true label. "Blue is the left team, orange is the right. The banner is green when the prediction matches." Run it with 2 or 3 more seeds; if one is wrong, say so. |
+| 6 | 3:10–4:10 | `http://localhost:8000/` (the UI), then `/docs` briefly | "Now the demo. A FastAPI service loads B8 once and serves it; this page sits on top of its endpoints." Click **Random clip** 2–3 times: "It picks a held-out validation clip, runs B8, and shows the 9 frames with boxes coloured by team (blue left, orange right), the prediction against the ground truth, and all 8 probabilities." If one is wrong, say so. Then show `/docs`: "The same endpoints are available as a JSON API." |
 | 7 | 4:10–4:35 | Hugging Face Space and model repo | "Weights and a model card are on Hugging Face, and the demo Space shows precomputed predictions on 20 held-out clips. It's static, not live, because free Gradio hosting needs a paid plan." |
 | 8 | 4:35–5:00 | README limitations / report "Next Steps" | "Limits: the model needs tracked player boxes, taken here from the dataset annotations. There's no detector or tracker, so accuracy on new video is unmeasured. Next: a detector plus tracker in front of B8, and measuring that drop." |
 

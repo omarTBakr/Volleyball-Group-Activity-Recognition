@@ -40,3 +40,21 @@ def test_video_endpoint_returns_gif(client):
     r = client.get("/predict/random-validation/video", params={"seed": 1})
     assert r.status_code == 200 and r.headers["content-type"] == "image/gif"
     assert r.content[:3] == b"GIF"
+
+
+def test_video_is_shown_inline(client):
+    r = client.get("/predict/random-validation/video", params={"seed": 1})
+    assert r.headers["content-disposition"].startswith("inline")
+
+
+def test_ui_page_is_served(client):
+    r = client.get("/")
+    assert r.status_code == 200 and "text/html" in r.headers["content-type"]
+    assert "/predict/random-validation" in r.text
+
+
+def test_specific_clip_video_and_404(client):
+    pick = client.get("/predict/random-validation", params={"seed": 2}).json()
+    r = client.get("/predict/clip/video", params={"video_id": pick["video_id"], "clip_id": pick["clip_id"]})
+    assert r.status_code == 200 and r.content[:3] == b"GIF"
+    assert client.get("/predict/clip/video", params={"video_id": "nope", "clip_id": "0"}).status_code == 404

@@ -10,6 +10,7 @@ from __future__ import annotations
 import tempfile
 import threading
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 import torch
 from fastapi import FastAPI, HTTPException, Query, Request
@@ -19,6 +20,8 @@ from pydantic import BaseModel, Field
 from src.inference.b8 import default_ckpt, load_b8, predict_clip
 from src.inference.render import annotate_clip, write_gif, write_mp4
 from src.inference.sample import ClipSample, find_clip, get_dataset, random_validation_clip
+
+UI_PAGE = Path(__file__).resolve().parent / "static" / "index.html"
 
 
 class PlayerBox(BaseModel):
@@ -83,7 +86,14 @@ def _video(clip: ClipSample, pred: dict, fmt: str) -> FileResponse:
         path = tmp.name
     (write_gif if fmt == "gif" else write_mp4)(frames, path)
     return FileResponse(path, media_type="image/gif" if fmt == "gif" else "video/mp4",
-                        filename=f"{clip.video_id}_{clip.clip_id}{suffix}")
+                        filename=f"{clip.video_id}_{clip.clip_id}{suffix}",
+                        content_disposition_type="inline")  # show in the browser, don't download
+
+
+@app.get("/", include_in_schema=False)
+def ui() -> FileResponse:
+    """Basic browser UI over the endpoints below."""
+    return FileResponse(UI_PAGE, media_type="text/html")
 
 
 @app.get("/health")
@@ -115,3 +125,17 @@ def predict_specific(request: Request, body: ClipRequest):
     except KeyError as e:
         raise HTTPException(status_code=404, detail=str(e.args[0])) from e
     return _response(clip, _predict(request, clip))
+
+
+@app.get("/predict/clip/video")
+def predict_specific_video(
+    request: Request,
+    video_id: str,
+    clip_id: str,
+    format: str = Query("gif", pattern="^(gif|mp4)$"),
+):
+    try:
+        clip = find_clip(video_id, clip_id)
+    except KeyError as e:
+        raise HTTPException(status_code=404, detail=str(e.args[0])) from e
+    return _video(clip, _predict(request, clip), format)
