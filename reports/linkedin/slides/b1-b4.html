@@ -1,62 +1,63 @@
-<section id="b1-b4" data-transition="push" style="background:#F6F4EF;color:#1B2333;font-family:'IBM Plex Sans', Arial, sans-serif;padding:72px 96px;display:flex;flex-direction:column;gap:28px">
+<section id="b1-b4" data-transition="push" style="background:#F6F4EF;color:#1B2333;font-family:'IBM Plex Sans', Arial, sans-serif;padding:64px 96px;display:flex;flex-direction:column;gap:24px">
 <div style="display:flex;flex-direction:row;align-items:end;justify-content:space-between;gap:32px">
 <div style="display:flex;flex-direction:column;gap:8px">
 <p style="font-size:24px;letter-spacing:3px;text-transform:uppercase;font-weight:600;color:#A8431A">Volleyball group activity recognition · 1 / 3</p>
 <h2 style="font-family:'Oswald', Arial, sans-serif;font-size:60px;font-weight:600;line-height:1.1;color:#1B2333">From one frame to players and time</h2>
 </div>
-<p style="font-size:24px;color:#4A5263;text-align:right">Test accuracy, 1,337 held-out clips<br><span style="color:#A8431A">Highlighted = new in this step</span></p>
+<p style="font-size:24px;color:#4A5263;text-align:right">Test accuracy, 1,337 held-out clips<br><span style="color:#A8431A">Orange = new in this step</span> · <span style="color:#2F6FB0">Blue = skip connection</span></p>
 </div>
-<div style="flex:1;display:flex;flex-direction:row;align-items:center;gap:40px;background:#FFFEFB;border:1px solid #E4E0D6;border-radius:20px;padding:24px 32px">
+<div style="flex:1;display:flex;flex-direction:row;align-items:center;gap:32px;background:#FFFEFB;border:1px solid #E4E0D6;border-radius:20px;padding:20px 16px 20px 24px">
 <div style="width:500px;display:flex;flex-direction:column;gap:8px">
 <div style="display:flex;flex-direction:row;align-items:center;justify-content:space-between;gap:16px">
 <h3 style="font-family:'Oswald', Arial, sans-serif;font-size:40px;font-weight:500;line-height:1.2;color:#1B2333">B1 · Single frame</h3>
 <p style="font-size:26px;font-weight:600;color:#A8431A;background:#FCE3D4;padding:4px 16px;border-radius:999px">62.6%</p>
 </div>
-<p style="font-size:24px;line-height:1.35;color:#4A5263">One middle frame, no players, no time. The floor every later model has to beat.</p>
+<p style="font-size:24px;line-height:1.35;color:#4A5263">One middle frame, no players, no time. A fine-tuned ResNet-50: the floor every later model has to beat.</p>
 </div>
-<div style="flex:1;display:flex;flex-direction:row;align-items:center;gap:10px">
-<p style="font-size:24px;line-height:1.25;text-align:center;white-space:nowrap;background:#EDF0F4;padding:10px 14px;border-radius:12px">Middle<br>frame</p>
-<x-shape kind="arrow-right" style="width:28px;height:16px;background:#9AA3B2"></x-shape>
+<div style="flex:1;display:flex;flex-direction:row;align-items:center;gap:6px;padding:0px 0px 0px 8px">
+<p style="font-size:24px;line-height:1.25;text-align:center;white-space:nowrap;background:#FDFDFB;border:2px solid #C9D0DA;padding:10px 14px;border-radius:12px">Middle<br>frame</p>
+<x-shape kind="arrow-right" style="width:24px;height:16px;background:#7D8696"></x-shape>
 <p style="font-size:24px;line-height:1.25;text-align:center;white-space:nowrap;background:#FCE3D4;border:2px solid #C9531F;padding:10px 14px;border-radius:12px">ResNet-50<br>fine-tuned</p>
-<x-shape kind="arrow-right" style="width:28px;height:16px;background:#9AA3B2"></x-shape>
-<p style="font-size:24px;line-height:1.25;text-align:center;white-space:nowrap;background:#EDF0F4;padding:10px 14px;border-radius:12px">MLP → 8<br>activities</p>
+<x-shape kind="arrow-right" style="width:24px;height:16px;background:#7D8696"></x-shape>
+<p style="font-size:24px;line-height:1.25;text-align:center;white-space:nowrap;background:#FDFDFB;border:2px solid #C9D0DA;padding:10px 14px;border-radius:12px">Dropout +<br>FC → 8</p>
 </div>
 </div>
-<div style="flex:1;display:flex;flex-direction:row;align-items:center;gap:40px;background:#FFFEFB;border:1px solid #E4E0D6;border-radius:20px;padding:24px 32px">
+<div style="flex:1;display:flex;flex-direction:row;align-items:center;gap:32px;background:#FFFEFB;border:1px solid #E4E0D6;border-radius:20px;padding:20px 16px 20px 24px">
 <div style="width:500px;display:flex;flex-direction:column;gap:8px">
 <div style="display:flex;flex-direction:row;align-items:center;justify-content:space-between;gap:16px">
 <h3 style="font-family:'Oswald', Arial, sans-serif;font-size:40px;font-weight:500;line-height:1.2;color:#1B2333">B3 · Player crops</h3>
 <p style="font-size:26px;font-weight:600;color:#A8431A;background:#FCE3D4;padding:4px 16px;border-radius:999px">60.7%</p>
 </div>
-<p style="font-size:24px;line-height:1.35;color:#4A5263">Adds players: a ResNet trained on the 9 player actions, pooled across everyone on court. No time yet.</p>
+<p style="font-size:24px;line-height:1.35;color:#4A5263">Adds players: a ResNet-50 fine-tuned on the 9 player actions, then frozen; its features are pooled across players. No time yet.</p>
 </div>
-<div style="flex:1;display:flex;flex-direction:row;align-items:center;gap:10px">
-<p style="font-size:24px;line-height:1.25;text-align:center;white-space:nowrap;background:#FCE3D4;border:2px solid #C9531F;padding:10px 14px;border-radius:12px">Player<br>crops</p>
-<x-shape kind="arrow-right" style="width:28px;height:16px;background:#9AA3B2"></x-shape>
-<p style="font-size:24px;line-height:1.25;text-align:center;white-space:nowrap;background:#EDF0F4;padding:10px 14px;border-radius:12px">ResNet-50<br>frozen</p>
-<x-shape kind="arrow-right" style="width:28px;height:16px;background:#9AA3B2"></x-shape>
-<p style="font-size:24px;line-height:1.25;text-align:center;white-space:nowrap;background:#EDF0F4;padding:10px 14px;border-radius:12px">Max + mean<br>pool</p>
-<x-shape kind="arrow-right" style="width:28px;height:16px;background:#9AA3B2"></x-shape>
-<p style="font-size:24px;line-height:1.25;text-align:center;white-space:nowrap;background:#EDF0F4;padding:10px 14px;border-radius:12px">MLP → 8<br>activities</p>
+<div style="position:relative;flex:1;height:200px">
+<div style="position:absolute;left:0px;top:66px;width:378px;height:134px;background:#F1EEE6;border:1px dashed #C9C1AE;border-radius:14px;display:flex;flex-direction:column;justify-content:end;padding:0px 0px 4px 0px"><p style="font-size:24px;line-height:1.25;text-align:center;color:#5E6676">per player</p></div>
+<p style="position:absolute;left:8px;top:76px;width:186px;font-size:24px;line-height:1.25;text-align:center;white-space:nowrap;background:#FCE3D4;border:2px solid #C9531F;padding:10px 0px;border-radius:12px">Player crops<br>mid frame</p>
+<x-shape kind="arrow-right" style="position:absolute;left:200px;top:110px;width:24px;height:16px;background:#7D8696"></x-shape>
+<p style="position:absolute;left:230px;top:76px;width:140px;font-size:24px;line-height:1.25;text-align:center;white-space:nowrap;background:#FDFDFB;border:2px solid #C9D0DA;padding:10px 0px;border-radius:12px">ResNet-50<br>frozen</p>
+<x-shape kind="arrow-right" style="position:absolute;left:376px;top:110px;width:24px;height:16px;background:#7D8696"></x-shape>
+<p style="position:absolute;left:406px;top:76px;width:186px;font-size:24px;line-height:1.25;text-align:center;white-space:nowrap;background:#FDFDFB;border:2px solid #C9D0DA;padding:10px 0px;border-radius:12px">Max ‖ mean<br>over players</p>
+<x-shape kind="arrow-right" style="position:absolute;left:598px;top:110px;width:24px;height:16px;background:#7D8696"></x-shape>
+<p style="position:absolute;left:628px;top:76px;width:84px;font-size:24px;line-height:1.25;text-align:center;white-space:nowrap;background:#FDFDFB;border:2px solid #C9D0DA;padding:10px 0px;border-radius:12px">MLP<br>→ 8</p>
 </div>
 </div>
-<div style="flex:1;display:flex;flex-direction:row;align-items:center;gap:40px;background:#FFFEFB;border:1px solid #E4E0D6;border-radius:20px;padding:24px 32px">
+<div style="flex:1;display:flex;flex-direction:row;align-items:center;gap:32px;background:#FFFEFB;border:1px solid #E4E0D6;border-radius:20px;padding:20px 16px 20px 24px">
 <div style="width:500px;display:flex;flex-direction:column;gap:8px">
 <div style="display:flex;flex-direction:row;align-items:center;justify-content:space-between;gap:16px">
 <h3 style="font-family:'Oswald', Arial, sans-serif;font-size:40px;font-weight:500;line-height:1.2;color:#1B2333">B4 · Frames over time</h3>
 <p style="font-size:26px;font-weight:600;color:#A8431A;background:#FCE3D4;padding:4px 16px;border-radius:999px">66.1%</p>
 </div>
-<p style="font-size:24px;line-height:1.35;color:#4A5263">Adds time instead: features from all 9 frames run through an LSTM. No players.</p>
+<p style="font-size:24px;line-height:1.35;color:#4A5263">Adds time instead: B1's frozen ResNet on all 9 frames, an LSTM over them, and its last state classified. No players.</p>
 </div>
-<div style="flex:1;display:flex;flex-direction:row;align-items:center;gap:10px">
-<p style="font-size:24px;line-height:1.25;text-align:center;white-space:nowrap;background:#EDF0F4;padding:10px 14px;border-radius:12px">9 full<br>frames</p>
-<x-shape kind="arrow-right" style="width:28px;height:16px;background:#9AA3B2"></x-shape>
-<p style="font-size:24px;line-height:1.25;text-align:center;white-space:nowrap;background:#EDF0F4;padding:10px 14px;border-radius:12px">B1 ResNet<br>frozen</p>
-<x-shape kind="arrow-right" style="width:28px;height:16px;background:#9AA3B2"></x-shape>
-<p style="font-size:24px;line-height:1.25;text-align:center;white-space:nowrap;background:#FCE3D4;border:2px solid #C9531F;padding:10px 14px;border-radius:12px">LSTM<br>over time</p>
-<x-shape kind="arrow-right" style="width:28px;height:16px;background:#9AA3B2"></x-shape>
-<p style="font-size:24px;line-height:1.25;text-align:center;white-space:nowrap;background:#EDF0F4;padding:10px 14px;border-radius:12px">MLP → 8<br>activities</p>
+<div style="flex:1;display:flex;flex-direction:row;align-items:center;gap:6px;padding:0px 0px 0px 8px">
+<p style="font-size:24px;line-height:1.25;text-align:center;white-space:nowrap;background:#FDFDFB;border:2px solid #C9D0DA;padding:10px 14px;border-radius:12px">9 full<br>frames</p>
+<x-shape kind="arrow-right" style="width:24px;height:16px;background:#7D8696"></x-shape>
+<p style="font-size:24px;line-height:1.25;text-align:center;white-space:nowrap;background:#FDFDFB;border:2px solid #C9D0DA;padding:10px 14px;border-radius:12px">B1 ResNet<br>frozen</p>
+<x-shape kind="arrow-right" style="width:24px;height:16px;background:#7D8696"></x-shape>
+<p style="font-size:24px;line-height:1.25;text-align:center;white-space:nowrap;background:#FCE3D4;border:2px solid #C9531F;padding:10px 14px;border-radius:12px">LSTM<br>last state</p>
+<x-shape kind="arrow-right" style="width:24px;height:16px;background:#7D8696"></x-shape>
+<p style="font-size:24px;line-height:1.25;text-align:center;white-space:nowrap;background:#FDFDFB;border:2px solid #C9D0DA;padding:10px 14px;border-radius:12px">MLP<br>→ 8</p>
 </div>
 </div>
-<aside>B2 does not exist in this project; the ladder goes B1, B3, B4. Each row adds one idea, highlighted in orange in its diagram.</aside>
+<aside>B2 does not exist in this project; the ladder goes B1, B3, B4. Each row adds one idea, highlighted in orange in its diagram. The shaded "per player" band marks layers that run on every player separately with shared weights. B3 is two-stage: Stage A fine-tunes the ResNet on player actions, Stage B freezes it and trains only the pooled head.</aside>
 </section>
