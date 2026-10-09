@@ -16,6 +16,7 @@ The snapshot shows the output of `uv run python -m src.data.visualize_data` with
 - **Stack**: PyTorch + Hydra config + TensorBoard logging; **AdamW** optimizer; shared `Trainer` (one stage per call) and central batch unpackers; multi-GPU via `nn.DataParallel`; Kaggle dual-T4 ready.
 - **Paper**: Ibrahim et al., *A Hierarchical Deep Temporal Model for Group Activity Recognition*, CVPR 2016 (+ journal extension, arXiv:1607.02643).
 - **Full write-up**: [`reports/report.pdf`](reports/report.pdf) — the LaTeX report with per-baseline analysis and confusion-matrix figures.
+- **Demo**: B8 served through a local FastAPI UI and a public Hugging Face Space; recordings in [Demo](#demo).
 
 ### Results Summary
 
@@ -627,11 +628,23 @@ The checkpoint is `saved_models/baseline8_stage_b_run1.pt` (override with `VB_B8
 | Weights + model card (B8) | [`OmarTBakr/volleyball-activity-b8`](https://huggingface.co/OmarTBakr/volleyball-activity-b8) |
 | Demo Space (static) | [`OmarTBakr/volleyball-activity-demo`](https://huggingface.co/spaces/OmarTBakr/volleyball-activity-demo) |
 
-Both repos are currently **private** until they are made public. The Space is **static**: it shows B8's *precomputed* predictions on 20 held-out validation clips (2 per activity plus 4 random, fixed seed, not chosen by outcome) rather than running the model, because Gradio Spaces on free CPU need a Hugging Face PRO subscription. Twenty clips illustrate the model; they are not an accuracy estimate (the test split is the reference: 85.64%).
+Both repos are **public**. The Space is **static**: it shows B8's *precomputed* predictions on 20 held-out validation clips (2 per activity plus 4 random, fixed seed, not chosen by outcome) rather than running the model, because Gradio Spaces on free CPU need a Hugging Face PRO subscription. Twenty clips illustrate the model; they are not an accuracy estimate (the test split is the reference: 85.64%).
 
 - `space_static/` — the published page; regenerate with `uv run python space/build_static.py`.
 - `space/` — a live Gradio version (`app.py`, standalone `b8_model.py`, the 20-clip bundle from `space.build_bundle`). Its probabilities match the repo pipeline exactly on all 20 clips; deploy it as a Gradio Space if you have PRO, or run `python space/app.py` after `pip install gradio`.
 - The Hugging Face token lives in `.env` (`HF_TOKEN`, see `.env.example`); `.env` is gitignored.
+
+### Demo
+
+**Local FastAPI UI:** two random validation clips, then a chosen one (video 2, clip 54400), each showing the annotated clip, the predicted vs. true activity, and all 8 probabilities.
+
+![FastAPI UI demo](reports/demo/fastapi_ui_demo.gif)
+
+**Hugging Face Space:** clicking through the precomputed clips, then the model card.
+
+![Hugging Face Space demo](reports/demo/huggingface_space_demo.gif)
+
+Both recordings joined into one silent video: [`reports/demo/demo_video.mp4`](reports/demo/demo_video.mp4) (48 s, 30 fps). The recordings were captured at about 1.5 frames per second, so the video blends between frames instead of showing true motion.
 
 ---
 
@@ -884,7 +897,8 @@ Project1/
 │
 ├── reports/
 │   ├── report.tex               # LaTeX report
-│   └── figures/                 # Report figures (incl. demo thumbnail)
+│   ├── figures/                 # Report figures (incl. demo thumbnail)
+│   └── demo/                    # FastAPI UI + HF Space recordings (GIFs, MP4)
 │
 ├── DataSet/                     # Raw data (not tracked in git)
 ├── saved_models/                # Model checkpoints (.pt)
