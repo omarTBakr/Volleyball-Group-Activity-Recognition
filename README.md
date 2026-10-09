@@ -2,9 +2,9 @@
 
 A deep learning pipeline for **group activity recognition** in volleyball videos, based on the [CVPR 2016 paper](https://www.cs.sfu.ca/~mori/research/papers/ibrahim-cvpr16.pdf) by Mostafa S. Ibrahim et al.
 
-![Sample clip](plots/videoAnnot.png)
+[![Demo: B8 in the local FastAPI UI, then the Hugging Face Space](reports/demo/demo.gif)](reports/demo/demo_video.mp4)
 
-The snapshot shows the output of `uv run python -m src.data.visualize_data` with `video_fully_annotated=True`.
+B8 (the best model) predicting held-out validation clips in the local FastAPI UI, then in the public Hugging Face Space. Click the animation for the MP4; details in [Demo](#demo).
 
 ---
 
@@ -636,15 +636,25 @@ Both repos are **public**. The Space is **static**: it shows B8's *precomputed* 
 
 ### Demo
 
-**Local FastAPI UI:** two random validation clips, then a chosen one (video 2, clip 54400), each showing the annotated clip, the predicted vs. true activity, and all 8 probabilities.
+The recording at the [top of this README](#volleyball-group-activity-recognition) has two parts:
 
-![FastAPI UI demo](reports/demo/fastapi_ui_demo.gif)
+- **Local FastAPI UI:** two random validation clips, then a chosen one (video 2, clip 54400), each showing the annotated clip, the predicted vs. true activity, and all 8 probabilities.
+- **Hugging Face Space:** clicking through the precomputed clips, then the model card.
 
-**Hugging Face Space:** clicking through the precomputed clips, then the model card.
+The full-length silent video is [`reports/demo/demo_video.mp4`](reports/demo/demo_video.mp4) (48 s, 30 fps); the two parts are also kept separately as `fastapi_ui_demo.gif` and `huggingface_space_demo.gif`. The recordings were captured at about 1.5 frames per second, so the video blends between frames instead of showing true motion.
 
-![Hugging Face Space demo](reports/demo/huggingface_space_demo.gif)
+### TensorBoard demo
 
-Both recordings joined into one silent video: [`reports/demo/demo_video.mp4`](reports/demo/demo_video.mp4) (48 s, 30 fps). The recordings were captured at about 1.5 frames per second, so the video blends between frames instead of showing true motion.
+[![TensorBoard demo: Stage A and Stage B curves, B7 vs. B8, then the hparams table](reports/demo/tensorboard_demo.gif)](reports/demo/tensorboard_demo.mp4)
+
+The dashboards overlay the runs of every baseline (see [TensorBoard](#tensorboard) to launch them). The walkthrough shows:
+
+1. **Stage A** (person-action pretraining, 9 classes): train/val F1 and loss for all runs.
+2. **Stage B** (group-activity classification, 8 classes): the same metrics plus the learning-rate schedule.
+3. **B7 vs. B8:** runs filtered to `baseline[78]`, with the Stage B validation F1 expanded. B8's team-split pooling sits around 0.8, while every B7 run levels off near 0.6.
+4. **HPARAMS:** one row per run with its hyperparameters and test accuracy, macro-F1 and loss.
+
+Click the animation for the MP4 (35 s, 30 fps, silent; like the main demo, it blends between frames captured at about 1 frame per second).
 
 ---
 
@@ -662,15 +672,7 @@ B9 is the exception: `OUT_ROOT` in `models/baseline9.py` redirects its checkpoin
 uv run tensorboard --logdir_spec repo:logs,b9:~/volleyball_out/logs
 ```
 
-The dashboards below overlay the runs across baselines, so the two-stage training is directly comparable — **Stage A** (person-action pretraining, 9 classes) and **Stage B** (group-activity, 8 classes):
-
-**Stage A — person-action pretraining**
-
-![TensorBoard Stage A](logs/tensorboardStageA.png)
-
-**Stage B — group-activity classification**
-
-![TensorBoard Stage B](logs/tensorboardStageB.png)
+A recorded walkthrough of the dashboards is in [TensorBoard demo](#tensorboard-demo).
 
 ---
 
